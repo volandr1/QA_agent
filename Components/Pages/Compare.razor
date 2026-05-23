@@ -1,0 +1,273 @@
+@page "/compare/{Id1}/{Id2}"
+@rendermode InteractiveServer
+@inject ReportService ReportSvc
+
+<PageTitle>Compare Runs — QA Agent</PageTitle>
+
+@if (_loading)
+{
+    <div class="text-muted small">Loading...</div>
+}
+else if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+else if (_cmp is not null)
+{
+    var prev = _cmp.Previous;
+    var curr = _cmp.Current;
+    var delta = _cmp.PassRateDelta;
+    var deltaStr   = delta >= 0 ? $"+{delta:F1}%" : $"{delta:F1}%";
+    var deltaColor = delta > 0 ? "text-success" : delta < 0 ? "text-danger" : "text-muted";
+    var deltaIcon  = delta > 0 ? "📈" : delta < 0 ? "📉" : "➡️";
+
+    <!-- Header -->
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+        <a href="/history" class="btn btn-outline-secondary btn-sm">← History</a>
+        <h4 class="mb-0">Run Comparison</h4>
+        <span class="badge @(delta > 0 ? "bg-success" : delta < 0 ? "bg-danger" : "bg-secondary") ms-auto">
+            @deltaIcon @deltaStr
+        </span>
+    </div>
+
+    <!-- Side-by-side stats -->
+    <div class="row g-3 mb-3">
+        <!-- Previous -->
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header fw-semibold small text-muted">
+                    🕐 Previous — @prev.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                </div>
+                <div class="card-body">
+                    <div class="fw-semibold">@(prev.ApiTitle ?? prev.BaseUrl)</div>
+                    <div class="small text-muted mb-2">@prev.BaseUrl</div>
+                    <div class="d-flex gap-3 text-center">
+                        <div>
+                            <div class="fs-5 fw-bold text-success">@prev.Passed</div>
+                            <div class="small text-muted">Passed</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold text-danger">@prev.Failed</div>
+                            <div class="small text-muted">Failed</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold text-warning">@prev.Errors</div>
+                            <div class="small text-muted">Errors</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold @PassRateClass(prev.PassRate)">@prev.PassRate%</div>
+                            <div class="small text-muted">Pass rate</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Current -->
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100 border-primary">
+                <div class="card-header fw-semibold small text-primary">
+                    ✅ Current — @curr.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                </div>
+                <div class="card-body">
+                    <div class="fw-semibold">@(curr.ApiTitle ?? curr.BaseUrl)</div>
+                    <div class="small text-muted mb-2">@curr.BaseUrl</div>
+                    <div class="d-flex gap-3 text-center">
+                        <div>
+                            <div class="fs-5 fw-bold text-success">@curr.Passed</div>
+                            <div class="small text-muted">Passed</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold text-danger">@curr.Failed</div>
+                            <div class="small text-muted">Failed</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold text-warning">@curr.Errors</div>
+                            <div class="small text-muted">Errors</div>
+                        </div>
+                        <div>
+                            <div class="fs-5 fw-bold @PassRateClass(curr.PassRate)">@curr.PassRate%</div>
+                            <div class="small text-muted">Pass rate</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- No changes -->
+    @if (!_cmp.HasChanges)
+    {
+        <div class="alert alert-success">
+            ✅ No changes between the two runs — results are identical.
+        </div>
+    }
+
+    <!-- Regressions -->
+    @if (_cmp.NewFailures.Count > 0)
+    {
+        <div class="mb-3">
+            <div class="section-badge bg-danger-subtle text-danger-emphasis mb-2">
+                🔴 Regressions — @_cmp.NewFailures.Count new failure(s)
+            </div>
+            <div class="card shadow-sm border-danger">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Scenario</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _cmp.NewFailures)
+                            {
+                                <tr style="background:#fff5f5">
+                                    <td class="small font-monospace text-primary">@t.EndpointLabel</td>
+                                    <td class="small">@t.ScenarioName</td>
+                                    <td class="small text-danger">@Truncate(t.ErrorMessage, 120)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Fixed -->
+    @if (_cmp.FixedTests.Count > 0)
+    {
+        <div class="mb-3">
+            <div class="section-badge bg-success-subtle text-success-emphasis mb-2">
+                🟢 Fixed — @_cmp.FixedTests.Count test(s) now passing
+            </div>
+            <div class="card shadow-sm border-success">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr><th>Endpoint</th><th>Scenario</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _cmp.FixedTests)
+                            {
+                                <tr style="background:#f0fdf4">
+                                    <td class="small font-monospace text-primary">@t.EndpointLabel</td>
+                                    <td class="small">@t.ScenarioName</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- New tests -->
+    @if (_cmp.NewTests.Count > 0)
+    {
+        <div class="mb-3">
+            <div class="section-badge bg-info-subtle text-info-emphasis mb-2">
+                🆕 New tests — @_cmp.NewTests.Count test(s) not in previous run
+            </div>
+            <div class="card shadow-sm">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr><th>Endpoint</th><th>Scenario</th><th class="text-center">Status</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _cmp.NewTests)
+                            {
+                                var cls = t.Status == "Passed" ? "text-success" : "text-danger";
+                                <tr>
+                                    <td class="small font-monospace text-primary">@t.EndpointLabel</td>
+                                    <td class="small">@t.ScenarioName</td>
+                                    <td class="small text-center @cls">@t.Status</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Removed tests -->
+    @if (_cmp.RemovedTests.Count > 0)
+    {
+        <div class="mb-3">
+            <div class="section-badge bg-warning-subtle text-warning-emphasis mb-2">
+                🗑 Removed — @_cmp.RemovedTests.Count test(s) missing in current run
+            </div>
+            <div class="card shadow-sm">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr><th>Endpoint</th><th>Scenario</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _cmp.RemovedTests)
+                            {
+                                <tr style="background:#fffbeb">
+                                    <td class="small font-monospace text-primary">@t.EndpointLabel</td>
+                                    <td class="small">@t.ScenarioName</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Links to full reports -->
+    <div class="d-flex gap-2 mt-2">
+        <a href="/run/@prev.Id" class="btn btn-outline-secondary btn-sm">📋 Previous report</a>
+        <a href="/run/@curr.Id" class="btn btn-outline-primary btn-sm">📋 Current report</a>
+    </div>
+}
+
+<style>
+    .section-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: .85rem;
+    }
+</style>
+
+@code {
+    [Parameter] public string Id1 { get; set; } = "";
+    [Parameter] public string Id2 { get; set; } = "";
+
+    private bool           _loading = true;
+    private string?        _error;
+    private RunComparison? _cmp;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var all  = await ReportSvc.GetAllRunsAsync();
+        var run1 = all.FirstOrDefault(r => r.Id == Id1);
+        var run2 = all.FirstOrDefault(r => r.Id == Id2);
+
+        if (run1 is null || run2 is null)
+        {
+            _error = $"Run not found: {(run1 is null ? Id1 : Id2)}";
+        }
+        else
+        {
+            // Id1 = previous, Id2 = current (enforced by History.GoCompare)
+            _cmp = ReportService.Compare(run1, run2);
+        }
+
+        _loading = false;
+    }
+
+    private static string PassRateClass(double rate) =>
+        rate >= 70 ? "text-success" : rate >= 40 ? "text-warning" : "text-danger";
+
+    private static string Truncate(string? s, int max) =>
+        s is null ? "" : s.Length <= max ? s : s[..max] + "…";
+}

@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+
+# .NET user files
+*.user
+*.suo
+.vs/
+
+# Rider
+.idea/
+
+# Runtime history (local runs — не заливаємо)
+.qa-history/
+
+# Generated test files
+GeneratedTests/
+
+# Environment / secrets
+appsettings.*.json
+!appsettings.json
+
+# OS
+.DS_Store
+Thumbs.db

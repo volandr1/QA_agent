@@ -1,0 +1,412 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject QaRunnerService RunnerService
+@inject QaAgentConfig Config
+@inject ReportService ReportSvc
+@using QA_agent.QaAgent.Core.Tools
+
+<PageTitle>Dashboard — QA Agent</PageTitle>
+
+<h4 class="mb-3">Dashboard</h4>
+
+<!-- Run Form -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">New Test Run</div>
+    <div class="card-body">
+
+        <!-- API Presets -->
+        <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+            <span class="small text-muted">Quick select:</span>
+            @foreach (var preset in _presets)
+            {
+                <button class="btn btn-outline-secondary btn-sm py-0 px-2"
+                        style="font-size:.8rem;"
+                        disabled="@RunnerService.IsRunning"
+                        @onclick="() => ApplyPreset(preset)">
+                    @preset.Emoji @preset.Name
+                </button>
+            }
+        </div>
+
+        <div class="row g-2">
+            <div class="col-md-5">
+                <label class="form-label small mb-1">Swagger URL</label>
+                <div class="input-group input-group-sm">
+                    <input class="form-control form-control-sm" @bind="_swaggerUrl"
+                           disabled="@(RunnerService.IsRunning || _loadingTags)"
+                           placeholder="https://..." />
+                    <button class="btn btn-outline-secondary btn-sm"
+                            @onclick="LoadTagsAsync"
+                            disabled="@(RunnerService.IsRunning || _loadingTags || string.IsNullOrWhiteSpace(_swaggerUrl))"
+                            title="Load available tags from schema">
+                        @if (_loadingTags)
+                        {
+                            <span class="spinner-border spinner-border-sm"></span>
+                        }
+                        else
+                        {
+                            <span>🔍 Tags</span>
+                        }
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Base URL</label>
+                <input class="form-control form-control-sm" @bind="_baseUrl" disabled="@RunnerService.IsRunning" placeholder="https://..." />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Model</label>
+                <input class="form-control form-control-sm" @bind="_model" disabled="@RunnerService.IsRunning" />
+            </div>
+        </div>
+
+        @* Tag filter — shown after loading *@
+        @if (_availableTags.Count > 0)
+        {
+            <div class="mt-2 p-2 border rounded" style="background:#f8fafc;">
+                <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                    <span class="small fw-semibold text-muted">🏷 Filter by tag:</span>
+                    <button class="btn btn-outline-secondary btn-sm py-0 px-2"
+                            style="font-size:.75rem;"
+                            @onclick="SelectAllTags">All</button>
+                    <button class="btn btn-outline-secondary btn-sm py-0 px-2"
+                            style="font-size:.75rem;"
+                            @onclick="ClearAllTags">None</button>
+                    @if (_tagEndpointCount.Count > 0)
+                    {
+                        <span class="small text-muted ms-auto">
+                            @_selectedTags.Count(t => _availableTags.Contains(t)) / @_availableTags.Count tags →
+                            <strong>@CountSelectedEndpoints() endpoint(s)</strong>
+                        </span>
+                    }
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    @foreach (var tag in _availableTags)
+                    {
+                        var isChecked = _selectedTags.Contains(tag);
+                        var count = _tagEndpointCount.GetValueOrDefault(tag, 0);
+                        <div class="form-check form-check-inline me-0">
+                            <input class="form-check-input" type="checkbox" id="tag_@tag"
+                                   checked="@isChecked"
+                                   @onchange="e => ToggleTag(tag, (bool)e.Value!)"
+                                   disabled="@RunnerService.IsRunning" />
+                            <label class="form-check-label small" for="tag_@tag">
+                                @tag
+                                @if (count > 0)
+                                {
+                                    <span class="badge bg-secondary ms-1" style="font-size:.65rem;">@count</span>
+                                }
+                            </label>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+        @if (_tagError is not null)
+        {
+            <div class="alert alert-warning py-1 px-2 mt-2 small">⚠️ @_tagError</div>
+        }
+
+        <!-- Auth section -->
+        <div class="row g-2 mt-1">
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Auth Type</label>
+                <select class="form-select form-select-sm" @bind="_authType" disabled="@RunnerService.IsRunning">
+                    <option value="none">None</option>
+                    <option value="bearer">Bearer Token</option>
+                    <option value="apiKey">API Key</option>
+                    <option value="basic">Basic Auth</option>
+                </select>
+            </div>
+            @if (_authType == "bearer")
+            {
+                <div class="col-md-9">
+                    <label class="form-label small mb-1">Bearer Token</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="_bearerToken" disabled="@RunnerService.IsRunning"
+                           placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+                </div>
+            }
+            else if (_authType == "apiKey")
+            {
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Header Name</label>
+                    <input class="form-control form-control-sm" @bind="_apiKeyHeader"
+                           disabled="@RunnerService.IsRunning" placeholder="X-API-Key" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small mb-1">API Key Value</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="_apiKeyValue" disabled="@RunnerService.IsRunning" placeholder="my-secret-key" />
+                </div>
+            }
+            else if (_authType == "basic")
+            {
+                <div class="col-md-4">
+                    <label class="form-label small mb-1">Username</label>
+                    <input class="form-control form-control-sm" @bind="_basicUsername"
+                           disabled="@RunnerService.IsRunning" placeholder="admin" />
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small mb-1">Password</label>
+                    <input class="form-control form-control-sm" type="password"
+                           @bind="_basicPassword" disabled="@RunnerService.IsRunning" />
+                </div>
+            }
+        </div>
+
+        <div class="mt-3 d-flex gap-2 align-items-center">
+            @if (!RunnerService.IsRunning)
+            {
+                <button class="btn btn-primary btn-sm" @onclick="StartRun">▶ Start</button>
+            }
+            else
+            {
+                <button class="btn btn-danger btn-sm" @onclick="CancelRun">⏹ Cancel</button>
+                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                <span class="small text-muted">Running... @RunnerService.Progress%</span>
+            }
+        </div>
+
+        @if (RunnerService.IsRunning)
+        {
+            <div class="progress mt-2" style="height:6px;">
+                <div class="progress-bar bg-primary" style="width:@(RunnerService.Progress)%;transition:width .4s;"></div>
+            </div>
+        }
+
+        @if (RunnerService.ErrorMessage is not null)
+        {
+            <div class="alert alert-danger mt-2 py-2 small">@RunnerService.ErrorMessage</div>
+        }
+    </div>
+</div>
+
+<!-- Last run summary -->
+@if (_displayRun is not null)
+{
+    var run = _displayRun;
+    var rateClass = run.PassRate >= 70 ? "badge-pass-high" : run.PassRate >= 40 ? "badge-pass-mid" : "badge-pass-low";
+    <div class="card mb-3 shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center fw-semibold">
+            <span>Last Run — @run.ApiTitle</span>
+            <span class="badge @rateClass">@run.PassRate%</span>
+        </div>
+        <div class="card-body">
+            <div class="row g-2 text-center">
+                <div class="col">
+                    <div class="stat-card">
+                        <div class="stat-value text-success">@run.Passed</div>
+                        <div class="stat-label">Passed</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="stat-card">
+                        <div class="stat-value text-danger">@run.Failed</div>
+                        <div class="stat-label">Failed</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="stat-card">
+                        <div class="stat-value text-warning">@run.Errors</div>
+                        <div class="stat-label">Errors</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="stat-card">
+                        <div class="stat-value text-secondary">@run.Skipped</div>
+                        <div class="stat-label">Skipped</div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-2 small text-muted">
+                Run at @run.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm") •
+                Model: @run.ModelName •
+                Duration: @run.TotalDurationSeconds.ToString("F1")s
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Live log panel -->
+@if (RunnerService.IsRunning || RunnerService.Logs.Count > 0)
+{
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold small">Log Output</div>
+        <div class="card-body p-0">
+            <div class="log-panel" id="log-panel">
+                @foreach (var entry in RunnerService.Logs)
+                {
+                    <div class="log-entry @entry.CssClass">
+                        <span class="text-muted">[@entry.Time]</span> @entry.Message
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string _swaggerUrl = "https://petstore3.swagger.io/api/v3/openapi.json";
+    private string _baseUrl    = "https://petstore3.swagger.io/api/v3";
+    private string _model      = "";
+    private RunRecord? _displayRun;
+
+    // Auth fields
+    private string _authType      = "none";
+    private string _bearerToken   = "";
+    private string _apiKeyHeader  = "X-API-Key";
+    private string _apiKeyValue   = "";
+    private string _basicUsername = "";
+    private string _basicPassword = "";
+
+    // Presets
+    private record ApiPreset(string Emoji, string Name, string SwaggerUrl, string BaseUrl);
+
+    private readonly ApiPreset[] _presets =
+    [
+        new("🐾", "Petstore3",    "https://petstore3.swagger.io/api/v3/openapi.json",          "https://petstore3.swagger.io/api/v3"),
+        new("📋", "FakeRestAPI",  "https://fakerestapi.azurewebsites.net/swagger/v1/swagger.json", "https://fakerestapi.azurewebsites.net"),
+        new("🏠", "Local :5000",  "http://localhost:5000/swagger/v1/swagger.json",              "http://localhost:5000"),
+        new("🏠", "Local :7000",  "http://localhost:7000/swagger/v1/swagger.json",              "http://localhost:7000"),
+    ];
+
+    private void ApplyPreset(ApiPreset preset)
+    {
+        _swaggerUrl    = preset.SwaggerUrl;
+        _baseUrl       = preset.BaseUrl;
+        // Reset tags when switching API
+        _availableTags.Clear();
+        _selectedTags.Clear();
+        _tagEndpointCount.Clear();
+        _tagError = null;
+    }
+
+    // Tag filter
+    private List<string>            _availableTags     = [];
+    private HashSet<string>         _selectedTags      = [];
+    private Dictionary<string, int> _tagEndpointCount  = [];
+    private bool                    _loadingTags;
+    private string?                 _tagError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _model = Config.Ollama.Model;
+        RunnerService.OnChange += HandleChange;
+
+        _displayRun = RunnerService.LastRun;
+        if (_displayRun is null)
+        {
+            var runs = await ReportSvc.GetAllRunsAsync();
+            _displayRun = runs.FirstOrDefault();
+        }
+    }
+
+    private void HandleChange() => InvokeAsync(() =>
+    {
+        if (RunnerService.LastRun is not null)
+            _displayRun = RunnerService.LastRun;
+        StateHasChanged();
+    });
+
+    // ── Tag loading ───────────────────────────────────────────────────────────
+
+    private async Task LoadTagsAsync()
+    {
+        _loadingTags = true;
+        _tagError    = null;
+        _availableTags.Clear();
+        _selectedTags.Clear();
+        _tagEndpointCount.Clear();
+        StateHasChanged();
+
+        try
+        {
+            var parser = new SwaggerParser();
+            var result = _swaggerUrl.Trim().StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? await parser.ParseUrlAsync(_swaggerUrl.Trim())
+                : await parser.ParseFileAsync(_swaggerUrl.Trim());
+
+            if (!result.IsSuccess || result.Endpoints.Count == 0)
+            {
+                _tagError = "Could not load schema. Check the Swagger URL.";
+                return;
+            }
+
+            // Collect distinct tags and count endpoints per tag
+            foreach (var ep in result.Endpoints)
+            {
+                foreach (var tag in ep.Tags)
+                {
+                    if (!_tagEndpointCount.TryAdd(tag, 1))
+                        _tagEndpointCount[tag]++;
+                }
+            }
+
+            // Endpoints with NO tags get a virtual "(untagged)" group
+            var untagged = result.Endpoints.Count(e => e.Tags.Count == 0);
+            if (untagged > 0)
+                _tagEndpointCount["(untagged)"] = untagged;
+
+            _availableTags = [.. _tagEndpointCount.Keys.OrderBy(t => t)];
+            _selectedTags  = [.. _availableTags]; // all selected by default
+        }
+        catch (Exception ex)
+        {
+            _tagError = ex.Message;
+        }
+        finally
+        {
+            _loadingTags = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleTag(string tag, bool isChecked)
+    {
+        if (isChecked) _selectedTags.Add(tag);
+        else           _selectedTags.Remove(tag);
+    }
+
+    private void SelectAllTags() => _selectedTags = [.. _availableTags];
+    private void ClearAllTags()  => _selectedTags.Clear();
+
+    private int CountSelectedEndpoints() =>
+        _tagEndpointCount
+            .Where(kv => _selectedTags.Contains(kv.Key))
+            .Sum(kv => kv.Value);
+
+    // ── Start/Cancel ──────────────────────────────────────────────────────────
+
+    private void StartRun()
+    {
+        var auth = new global::QaAgent.Core.Models.AuthConfig
+        {
+            Type          = _authType,
+            BearerToken   = _bearerToken,
+            ApiKeyHeader  = _apiKeyHeader,
+            ApiKeyValue   = _apiKeyValue,
+            BasicUsername = _basicUsername,
+            BasicPassword = _basicPassword
+        };
+
+        // Pass selected tags only if user explicitly filtered (not all selected)
+        var tagsFilter = (_availableTags.Count > 0 && _selectedTags.Count < _availableTags.Count)
+            ? (IReadOnlyList<string>)_selectedTags.ToList()
+            : null;
+
+        var req = new RunRequest(
+            _swaggerUrl.Trim(),
+            _baseUrl.Trim(),
+            _model.Trim(),
+            auth.IsConfigured ? auth : null,
+            tagsFilter);
+
+        RunnerService.TryStart(req);
+    }
+
+    private void CancelRun() => RunnerService.Cancel();
+
+    public void Dispose() => RunnerService.OnChange -= HandleChange;
+}

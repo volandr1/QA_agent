@@ -1,0 +1,290 @@
+@page "/history"
+@rendermode InteractiveServer
+@inject ReportService ReportSvc
+@inject QaAgentConfig Config
+
+<PageTitle>History — QA Agent</PageTitle>
+
+<div class="d-flex align-items-center mb-3 gap-2 flex-wrap">
+    <h4 class="mb-0 me-auto">Run History</h4>
+    @if (_runs.Count > 0)
+    {
+        <span class="small text-muted">@_filtered.Count of @_runs.Count run(s)</span>
+    }
+    @if (_compareIds.Count == 2)
+    {
+        <button class="btn btn-primary btn-sm"
+                @onclick="GoCompare">
+            ⚖️ Compare selected
+        </button>
+    }
+    else if (_compareIds.Count == 1)
+    {
+        <span class="small text-muted fst-italic">Select one more run to compare</span>
+    }
+</div>
+
+@if (_loading)
+{
+    <div class="text-muted small">Loading...</div>
+}
+else if (_runs.Count == 0)
+{
+    <div class="alert alert-info">No runs recorded yet. Go to Dashboard to start a run.</div>
+}
+else
+{
+    <!-- Search & filter bar -->
+    <div class="card shadow-sm mb-3">
+        <div class="card-body py-2 px-3">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-5">
+                    <label class="form-label small mb-1">Search</label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text">🔍</span>
+                        <input class="form-control form-control-sm"
+                               placeholder="API name or Base URL…"
+                               @bind="_searchText"
+                               @bind:event="oninput"
+                               @bind:after="ApplyFilter" />
+                        @if (!string.IsNullOrEmpty(_searchText))
+                        {
+                            <button class="btn btn-outline-secondary btn-sm" @onclick="ClearSearch" title="Clear">✕</button>
+                        }
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Health</label>
+                    <select class="form-select form-select-sm" @bind="_healthFilter" @bind:after="ApplyFilter">
+                        <option value="">All</option>
+                        <option value="high">✅ Healthy (≥70%)</option>
+                        <option value="mid">⚠️ Degraded (40–69%)</option>
+                        <option value="low">❌ Critical (&lt;40%)</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small mb-1">Sort</label>
+                    <select class="form-select form-select-sm" @bind="_sortOrder" @bind:after="ApplyFilter">
+                        <option value="newest">Newest first</option>
+                        <option value="oldest">Oldest first</option>
+                        <option value="best">Best pass rate</option>
+                        <option value="worst">Worst pass rate</option>
+                    </select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <button class="btn btn-outline-secondary btn-sm w-100" @onclick="ResetFilters">Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm delete banner -->
+    @if (_pendingDeleteId is not null)
+    {
+        var pending = _runs.FirstOrDefault(r => r.Id == _pendingDeleteId);
+        <div class="alert alert-warning d-flex align-items-center gap-3 py-2 mb-3">
+            <span class="small">
+                🗑 Delete run <strong>@(pending?.ApiTitle ?? pending?.BaseUrl)</strong>
+                from @pending?.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")?
+            </span>
+            <button class="btn btn-danger btn-sm ms-auto" @onclick="ConfirmDelete">Yes, delete</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="CancelDelete">Cancel</button>
+        </div>
+    }
+
+    @if (_filtered.Count == 0)
+    {
+        <div class="alert alert-secondary">No runs match the current filter.</div>
+    }
+    else
+    {
+        <div class="card shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:36px">
+                                @* deselect all chip *@
+                                @if (_compareIds.Count > 0)
+                                {
+                                    <button class="btn btn-link btn-sm p-0 text-muted" title="Clear selection"
+                                            @onclick="() => _compareIds.Clear()">✕</button>
+                                }
+                            </th>
+                            <th>Date</th>
+                            <th>API</th>
+                            <th>Base URL</th>
+                            <th class="text-center">Passed</th>
+                            <th class="text-center">Failed</th>
+                            <th class="text-center">Pass Rate</th>
+                            <th class="text-end">Duration</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var run in _filtered)
+                        {
+                            var rateClass  = run.PassRate >= 70 ? "pass-high" : run.PassRate >= 40 ? "pass-mid" : "pass-low";
+                            var isPending  = run.Id == _pendingDeleteId;
+                            var isChecked  = _compareIds.Contains(run.Id);
+                            var isDisabled = !isChecked && _compareIds.Count >= 2;
+
+                            <tr style="cursor:pointer; @(isPending ? "opacity:.5;" : "") @(isChecked ? "background:#eff6ff;" : "")"
+                                @onclick="() => Navigate(run.Id)">
+                                <td class="align-middle text-center" @onclick:stopPropagation="true">
+                                    <input type="checkbox"
+                                           class="form-check-input"
+                                           checked="@isChecked"
+                                           disabled="@isDisabled"
+                                           @onchange="() => ToggleCompare(run.Id)"
+                                           title="@(isDisabled ? "Deselect one run first" : "Select for comparison")" />
+                                </td>
+                                <td class="align-middle small">@run.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                                <td class="align-middle small">
+                                    @if (!string.IsNullOrEmpty(_searchText) && run.ApiTitle is not null)
+                                    { @((MarkupString)Highlight(run.ApiTitle, _searchText)) }
+                                    else
+                                    { @(run.ApiTitle ?? "—") }
+                                </td>
+                                <td class="align-middle small truncated" title="@run.BaseUrl">
+                                    @if (!string.IsNullOrEmpty(_searchText))
+                                    { @((MarkupString)Highlight(run.BaseUrl, _searchText)) }
+                                    else
+                                    { @run.BaseUrl }
+                                </td>
+                                <td class="align-middle text-center text-success">@run.Passed</td>
+                                <td class="align-middle text-center text-danger">@run.Failed</td>
+                                <td class="align-middle text-center @rateClass">@run.PassRate%</td>
+                                <td class="align-middle text-end small text-muted">@run.TotalDurationSeconds.ToString("F1")s</td>
+                                <td class="align-middle text-end" @onclick:stopPropagation="true">
+                                    <button class="btn btn-outline-danger btn-sm py-0 px-1"
+                                            style="font-size:.75rem; line-height:1.4;"
+                                            title="Delete this run"
+                                            @onclick="() => AskDelete(run.Id)">
+                                        🗑
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    private List<RunRecord> _runs     = [];
+    private List<RunRecord> _filtered = [];
+    private bool            _loading  = true;
+    private string?         _pendingDeleteId;
+
+    // Filter state
+    private string _searchText   = "";
+    private string _healthFilter = "";
+    private string _sortOrder    = "newest";
+
+    // Compare selection (max 2)
+    private readonly HashSet<string> _compareIds = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _runs    = await ReportSvc.GetAllRunsAsync();
+        _loading = false;
+        ApplyFilter();
+    }
+
+    // ── Compare ────────────────────────────────────────────────────────────────
+
+    private void ToggleCompare(string id)
+    {
+        if (_compareIds.Contains(id)) _compareIds.Remove(id);
+        else if (_compareIds.Count < 2) _compareIds.Add(id);
+    }
+
+    private void GoCompare()
+    {
+        var ids = _compareIds.ToArray();
+        // older run = "previous", newer run = "current"
+        var r0 = _runs.First(r => r.Id == ids[0]);
+        var r1 = _runs.First(r => r.Id == ids[1]);
+        var (prev, curr) = r0.RunAt < r1.RunAt ? (r0, r1) : (r1, r0);
+        Nav.NavigateTo($"/compare/{prev.Id}/{curr.Id}");
+    }
+
+    // ── Filter / sort ──────────────────────────────────────────────────────────
+
+    private void ApplyFilter()
+    {
+        var q = _searchText.Trim();
+
+        var filtered = _runs.Where(r =>
+        {
+            if (!string.IsNullOrEmpty(q))
+            {
+                var title = r.ApiTitle ?? "";
+                var url   = r.BaseUrl   ?? "";
+                if (!title.Contains(q, StringComparison.OrdinalIgnoreCase) &&
+                    !url  .Contains(q, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            return _healthFilter switch
+            {
+                "high" => r.PassRate >= 70,
+                "mid"  => r.PassRate is >= 40 and < 70,
+                "low"  => r.PassRate < 40,
+                _      => true
+            };
+        });
+
+        _filtered = _sortOrder switch
+        {
+            "oldest" => filtered.OrderBy(r => r.RunAt).ToList(),
+            "best"   => filtered.OrderByDescending(r => r.PassRate).ThenByDescending(r => r.RunAt).ToList(),
+            "worst"  => filtered.OrderBy(r => r.PassRate).ThenByDescending(r => r.RunAt).ToList(),
+            _        => filtered.OrderByDescending(r => r.RunAt).ToList()
+        };
+    }
+
+    private void ClearSearch()  { _searchText = ""; ApplyFilter(); }
+
+    private void ResetFilters()
+    {
+        _searchText = ""; _healthFilter = ""; _sortOrder = "newest";
+        ApplyFilter();
+    }
+
+    // ── Highlight ──────────────────────────────────────────────────────────────
+
+    private static string Highlight(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return System.Net.WebUtility.HtmlEncode(text);
+        var idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return System.Net.WebUtility.HtmlEncode(text);
+        var before = System.Net.WebUtility.HtmlEncode(text[..idx]);
+        var match  = System.Net.WebUtility.HtmlEncode(text[idx..(idx + query.Length)]);
+        var after  = System.Net.WebUtility.HtmlEncode(text[(idx + query.Length)..]);
+        return $"{before}<mark style='padding:0;background:#fef08a;border-radius:2px'>{match}</mark>{after}";
+    }
+
+    // ── Navigation ─────────────────────────────────────────────────────────────
+
+    private void Navigate(string id) => Nav.NavigateTo($"/run/{id}");
+
+    // ── Delete ─────────────────────────────────────────────────────────────────
+
+    private void AskDelete(string id)   => _pendingDeleteId = id;
+    private void CancelDelete()         => _pendingDeleteId = null;
+
+    private void ConfirmDelete()
+    {
+        if (_pendingDeleteId is null) return;
+        ReportSvc.Delete(_pendingDeleteId);
+        _runs.RemoveAll(r => r.Id == _pendingDeleteId);
+        _compareIds.Remove(_pendingDeleteId);
+        _pendingDeleteId = null;
+        ApplyFilter();
+    }
+}

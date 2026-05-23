@@ -1,0 +1,213 @@
+@page "/run/{RunId}"
+@rendermode InteractiveServer
+@inject ReportService ReportSvc
+@inject QaAgentConfig Config
+@inject IJSRuntime JS
+
+<PageTitle>Run Detail — QA Agent</PageTitle>
+
+@if (_loading)
+{
+    <div class="text-muted small">Loading...</div>
+}
+else if (_run is null)
+{
+    <div class="alert alert-warning">
+        Run <strong>@RunId</strong> not found.
+        <a href="/history" class="alert-link">Back to History</a>
+    </div>
+}
+else
+{
+    var run = _run;
+    var rateClass = run.PassRate >= 70 ? "badge-pass-high" : run.PassRate >= 40 ? "badge-pass-mid" : "badge-pass-low";
+    var failedAndErrors = run.Results.Where(r => r.Status is "Failed" or "Error").ToList();
+    var passedTests = run.Results.Where(r => r.Status == "Passed").ToList();
+
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+        <a href="/history" class="btn btn-sm btn-outline-secondary">← History</a>
+        <h5 class="mb-0">@(run.ApiTitle ?? "Run") — @run.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</h5>
+        <a href="/run/@run.Id/report.html" target="_blank"
+           class="btn btn-sm btn-success ms-auto" title="Download HTML report">
+            ⬇ HTML Report
+        </a>
+        <span class="badge @rateClass">@run.PassRate% Pass Rate</span>
+    </div>
+
+    <div class="row g-2 mb-3 text-center">
+        <div class="col">
+            <div class="stat-card">
+                <div class="stat-value text-success">@run.Passed</div>
+                <div class="stat-label">Passed</div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="stat-card">
+                <div class="stat-value text-danger">@run.Failed</div>
+                <div class="stat-label">Failed</div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="stat-card">
+                <div class="stat-value text-warning">@run.Errors</div>
+                <div class="stat-label">Errors</div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="stat-card">
+                <div class="stat-value text-secondary">@run.Skipped</div>
+                <div class="stat-label">Skipped</div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="stat-card">
+                <div class="stat-value">@run.TotalDurationSeconds.ToString("F1")s</div>
+                <div class="stat-label">Duration</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="small text-muted mb-3">
+        Model: @run.ModelName &nbsp;|&nbsp; Base URL: @run.BaseUrl &nbsp;|&nbsp; ID: @run.Id
+    </div>
+
+    @if (failedAndErrors.Count > 0)
+    {
+        <div class="section-title text-danger">Failed &amp; Error Tests (@failedAndErrors.Count)</div>
+        <div class="card shadow-sm mb-3">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Endpoint</th>
+                            <th>Scenario</th>
+                            <th>Status</th>
+                            <th class="text-center">HTTP</th>
+                            <th>Error</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in failedAndErrors)
+                        {
+                            var rowClass = r.Status == "Error" ? "table-warning" : "table-danger";
+                            var errTrunc = r.ErrorMessage is not null && r.ErrorMessage.Length > 200
+                                ? r.ErrorMessage[..200] + "..."
+                                : r.ErrorMessage;
+                            <tr class="@rowClass">
+                                <td class="small align-middle">@r.EndpointLabel</td>
+                                <td class="small align-middle">@r.ScenarioName</td>
+                                <td class="small align-middle">@r.Status</td>
+                                <td class="small align-middle text-center">@(r.ActualStatus?.ToString() ?? "—")</td>
+                                <td class="small align-middle" style="max-width:360px;word-break:break-word;">@errTrunc</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (passedTests.Count > 0)
+    {
+        <div class="section-title text-success">Passed Tests (@passedTests.Count)</div>
+        <div class="card shadow-sm mb-3">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Endpoint</th>
+                            <th>Scenario</th>
+                            <th class="text-end">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in passedTests)
+                        {
+                            <tr>
+                                <td class="small align-middle">@r.EndpointLabel</td>
+                                <td class="small align-middle">@r.ScenarioName</td>
+                                <td class="small align-middle text-end text-muted">@r.DurationMs.ToString("F0")ms</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(run.AiAnalysis))
+    {
+        <div class="section-title">🤖 AI Analysis</div>
+        <div class="card shadow-sm mb-3">
+            <div class="card-body" style="white-space: pre-wrap; font-size: 0.9rem; line-height: 1.6;">
+                @run.AiAnalysis
+            </div>
+        </div>
+    }
+
+    @if (run.GeneratedFiles.Count > 0)
+    {
+        <div class="section-title">📄 Generated Test Code</div>
+        <div class="mb-3">
+            @foreach (var file in run.GeneratedFiles)
+            {
+                var isOpen = _openFiles.Contains(file.EndpointLabel);
+                var lineCount = file.Code.Split('\n').Length;
+                <div class="card shadow-sm mb-2">
+                    <div class="card-header d-flex align-items-center gap-2 py-2"
+                         style="cursor:pointer; user-select:none;"
+                         @onclick="() => ToggleFile(file.EndpointLabel)">
+                        <span class="fw-semibold small font-monospace">@file.EndpointLabel</span>
+                        <span class="text-muted small ms-1">(@lineCount lines)</span>
+                        <span class="ms-auto small text-primary">@(isOpen ? "▲ Hide" : "▼ View Code")</span>
+                    </div>
+                    @if (isOpen)
+                    {
+                        <div class="card-body p-0 position-relative">
+                            <button class="btn btn-sm btn-outline-secondary position-absolute top-0 end-0 m-2"
+                                    style="z-index:1; font-size:0.7rem;"
+                                    @onclick="() => CopyCode(file.EndpointLabel, file.Code)">
+                                @(_copiedLabel == file.EndpointLabel ? "✅ Copied!" : "📋 Copy")
+                            </button>
+                            <pre class="mb-0 p-3" style="background:#1e1e1e; color:#d4d4d4; font-size:0.78rem;
+                                        overflow-x:auto; border-radius:0 0 6px 6px; max-height:500px;
+                                        overflow-y:auto;"><code>@file.Code</code></pre>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string RunId { get; set; } = "";
+
+    private RunRecord?   _run;
+    private bool         _loading    = true;
+    private HashSet<string> _openFiles = [];
+    private string?      _copiedLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var runs = await ReportSvc.GetAllRunsAsync();
+        _run = runs.FirstOrDefault(r => r.Id == RunId);
+        _loading = false;
+    }
+
+    private void ToggleFile(string label)
+    {
+        if (!_openFiles.Add(label))
+            _openFiles.Remove(label);
+    }
+
+    private async Task CopyCode(string label, string code)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", code);
+        _copiedLabel = label;
+        StateHasChanged();
+        await Task.Delay(2000);
+        _copiedLabel = null;
+        StateHasChanged();
+    }
+}

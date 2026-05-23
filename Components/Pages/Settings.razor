@@ -1,0 +1,214 @@
+@page "/settings"
+@rendermode InteractiveServer
+@inject QaAgentConfig Config
+@inject QaRunnerService RunnerService
+@using QA_agent.QaAgent.Core.Services
+
+<PageTitle>Settings — QA Agent</PageTitle>
+
+<h4 class="mb-3">Settings</h4>
+
+@if (_saved)
+{
+    <div class="alert alert-success py-2 small mb-3">✅ Settings saved successfully.</div>
+}
+@if (_error is not null)
+{
+    <div class="alert alert-danger py-2 small mb-3">❌ @_error</div>
+}
+
+<!-- Ollama -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">🤖 Ollama / LLM</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Ollama URL</label>
+                <input class="form-control form-control-sm" @bind="Config.Ollama.Url"
+                       placeholder="http://localhost:11434" />
+                <div class="form-text">Address of your local Ollama server.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Model</label>
+                <input class="form-control form-control-sm" @bind="Config.Ollama.Model"
+                       placeholder="llama3.1" />
+                <div class="form-text">Model name as shown in <code>ollama list</code>.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Temperature <span class="text-muted">(@Config.Ollama.Temperature.ToString("F1"))</span></label>
+                <input type="range" class="form-range" min="0" max="1" step="0.1"
+                       @bind="Config.Ollama.Temperature" />
+                <div class="form-text">0 = deterministic, 1 = creative. Recommended: 0.1–0.3</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Max Tokens</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Ollama.MaxTokens" min="512" max="32768" step="512" />
+                <div class="form-text">Maximum tokens per LLM response.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Execution -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">⚙️ Execution</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Max Endpoints</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.MaxEndpoints" min="0" max="500" />
+                <div class="form-text">0 = test all endpoints.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Test Timeout (seconds)</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.TestTimeoutSeconds" min="5" max="120" />
+                <div class="form-text">Per-test HTTP timeout.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Self-Healing Attempts</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.SelfHealingAttempts" min="0" max="10" />
+                <div class="form-text">Compile error healing attempts.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Assertion Healing Attempts</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.AssertionHealingAttempts" min="0" max="10" />
+                <div class="form-text">Runtime assertion healing attempts.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Max Parallel Groups</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.MaxParallelGroups" min="1" max="16" />
+                <div class="form-text">Endpoint groups compiled in parallel.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small mb-1">Max Parallel Methods</label>
+                <input class="form-control form-control-sm" type="number"
+                       @bind="Config.Execution.MaxParallelMethods" min="1" max="16" />
+                <div class="form-text">Test methods run in parallel per group.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Default Auth -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">🔐 Default Auth <span class="text-muted fw-normal small">(used when no auth is set in the run form)</span></div>
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Auth Type</label>
+                <select class="form-select form-select-sm" @bind="Config.Auth.Type">
+                    <option value="none">None</option>
+                    <option value="bearer">Bearer Token</option>
+                    <option value="apiKey">API Key</option>
+                    <option value="basic">Basic Auth</option>
+                </select>
+            </div>
+            @if (Config.Auth.Type == "bearer")
+            {
+                <div class="col-md-9">
+                    <label class="form-label small mb-1">Bearer Token</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="Config.Auth.BearerToken"
+                           placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+                </div>
+            }
+            else if (Config.Auth.Type == "apiKey")
+            {
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Header Name</label>
+                    <input class="form-control form-control-sm" @bind="Config.Auth.ApiKeyHeader"
+                           placeholder="X-API-Key" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small mb-1">API Key Value</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="Config.Auth.ApiKeyValue" placeholder="my-secret-key" />
+                </div>
+            }
+            else if (Config.Auth.Type == "basic")
+            {
+                <div class="col-md-4">
+                    <label class="form-label small mb-1">Username</label>
+                    <input class="form-control form-control-sm" @bind="Config.Auth.BasicUsername"
+                           placeholder="admin" />
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small mb-1">Password</label>
+                    <input class="form-control form-control-sm" type="password"
+                           @bind="Config.Auth.BasicPassword" />
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- Output -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">📁 Output</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label small mb-1">History Directory</label>
+                <input class="form-control form-control-sm" @bind="Config.Output.HistoryDir" />
+                <div class="form-text">Where run history JSON files are stored.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Report Directory</label>
+                <input class="form-control form-control-sm" @bind="Config.Output.ReportDir" />
+                <div class="form-text">Where Markdown reports are saved.</div>
+            </div>
+            <div class="col-md-12">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           @bind="Config.Output.SaveGeneratedTests" id="saveTests" />
+                    <label class="form-check-label small" for="saveTests">
+                        Save generated .cs test files to disk
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Save button -->
+<div class="d-flex gap-2 align-items-center">
+    <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@RunnerService.IsRunning">
+        💾 Save Settings
+    </button>
+    @if (RunnerService.IsRunning)
+    {
+        <span class="small text-muted">Cannot save while a run is in progress.</span>
+    }
+</div>
+
+@code {
+    private bool _saved;
+    private string? _error;
+
+    private async Task SaveAsync()
+    {
+        _saved = false;
+        _error = null;
+
+        try
+        {
+            await ConfigService.SaveAsync(Config);
+            _saved = true;
+
+            // Auto-hide success message after 3 seconds
+            await Task.Delay(3000);
+            _saved = false;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}
