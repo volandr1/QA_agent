@@ -176,6 +176,72 @@
     </div>
 </div>
 
+<!-- Telegram notifications -->
+<div class="card mb-3 shadow-sm">
+    <div class="card-header fw-semibold">✈️ Telegram Notifications</div>
+    <div class="card-body">
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="tgEnabled"
+                   @bind="Config.Telegram.Enabled" />
+            <label class="form-check-label" for="tgEnabled">
+                Send Telegram message after each run
+            </label>
+        </div>
+
+        @if (Config.Telegram.Enabled)
+        {
+            <div class="row g-3">
+                <div class="col-md-7">
+                    <label class="form-label small mb-1">Bot Token</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="Config.Telegram.BotToken"
+                           placeholder="7123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                    <div class="form-text">
+                        Отримай у <a href="https://t.me/BotFather" target="_blank">@@BotFather</a> → /newbot
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Chat ID</label>
+                    <input class="form-control form-control-sm font-monospace"
+                           @bind="Config.Telegram.ChatId"
+                           placeholder="123456789" />
+                    <div class="form-text">
+                        Напиши боту будь-що → відкрий
+                        <code>api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
+                    </div>
+                </div>
+                <div class="col-md-2 d-flex align-items-end pb-1">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="tgOnlyFail"
+                               @bind="Config.Telegram.OnlyOnFailure" />
+                        <label class="form-check-label small" for="tgOnlyFail">
+                            Only on failure
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3">
+                <button class="btn btn-outline-secondary btn-sm"
+                        @onclick="TestTelegramAsync"
+                        disabled="@(_testingTelegram || RunnerService.IsRunning)">
+                    @if (_testingTelegram)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1"></span>
+                    }
+                    📤 Send Test Message
+                </button>
+                @if (_testTelegramResult is not null)
+                {
+                    <span class="ms-2 small @(_testTelegramOk ? "text-success" : "text-danger")">
+                        @_testTelegramResult
+                    </span>
+                }
+            </div>
+        }
+    </div>
+</div>
+
 <!-- Save button -->
 <div class="d-flex gap-2 align-items-center">
     <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@RunnerService.IsRunning">
@@ -188,8 +254,14 @@
 </div>
 
 @code {
-    private bool _saved;
+    private bool    _saved;
     private string? _error;
+
+    // Telegram test
+    private bool    _testingTelegram;
+    private string? _testTelegramResult;
+    private bool    _testTelegramOk;
+
 
     private async Task SaveAsync()
     {
@@ -211,4 +283,51 @@
             _error = ex.Message;
         }
     }
+
+    private async Task TestTelegramAsync()
+    {
+        _testingTelegram    = true;
+        _testTelegramResult = null;
+        StateHasChanged();
+
+        try
+        {
+            await ConfigService.SaveAsync(Config);
+
+            var svc     = new TelegramNotificationService(Config.Telegram);
+            var fakeRun = new RunRecord
+            {
+                BaseUrl              = "https://example.com",
+                ApiTitle             = "Test Message",
+                ModelName            = "test",
+                Total                = 3,
+                Passed               = 2,
+                Failed               = 1,
+                Errors               = 0,
+                Skipped              = 0,
+                TotalDurationSeconds = 1.5,
+                AiAnalysis           = "Це тестове повідомлення від QA Agent. Якщо ви його отримали — Telegram налаштовано правильно! ✅"
+            };
+
+            // Тимчасово вимикаємо OnlyOnFailure щоб тест завжди надіслався
+            var savedOnly = Config.Telegram.OnlyOnFailure;
+            Config.Telegram.OnlyOnFailure = false;
+            var err = await svc.SendAsync(fakeRun);
+            Config.Telegram.OnlyOnFailure = savedOnly;
+
+            _testTelegramOk     = err is null;
+            _testTelegramResult = err is null ? "✅ Message sent!" : $"❌ {err}";
+        }
+        catch (Exception ex)
+        {
+            _testTelegramOk     = false;
+            _testTelegramResult = $"❌ {ex.Message}";
+        }
+        finally
+        {
+            _testingTelegram = false;
+            StateHasChanged();
+        }
+    }
+
 }

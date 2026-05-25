@@ -19,6 +19,7 @@ GeneratedTests/
 # Environment / secrets
 appsettings.*.json
 !appsettings.json
+qa-agent.config.json
 
 # OS
 .DS_Store

@@ -371,8 +371,19 @@ public sealed class SelfHealingAgent
                 raw = raw[..(lastBrace + 1)];
         }
 
-        // Safety check: if code has no namespace/class wrapper, it won't compile.
-        // Detect top-level public methods and note the issue (healing will catch it).
+        // ── Newtonsoft.Json → System.Text.Json ──────────────────────────────
+        raw = raw.Replace("using Newtonsoft.Json;", "using System.Text.Json;");
+        raw = raw.Replace("using Newtonsoft.Json.Linq;", "");
+        raw = Regex.Replace(raw, @"JsonConvert\.SerializeObject\(([^)]+)\)", "JsonSerializer.Serialize($1)");
+        raw = Regex.Replace(raw, @"JsonConvert\.DeserializeObject<([^>]+)>\(([^)]+)\)", "JsonSerializer.Deserialize<$1>($2)");
+        raw = Regex.Replace(raw, @"JObject\.Parse\(([^)]+)\)", "JsonDocument.Parse($1).RootElement");
+
+        // ── IDisposable на тест-класі → видаляємо ───────────────────────────
+        raw = Regex.Replace(raw, @"\s*:\s*IDisposable", "");
+        raw = Regex.Replace(raw,
+            @"[ \t]*public\s+void\s+Dispose\s*\(\s*\)\s*\{[^}]*\}\s*\r?\n",
+            "", RegexOptions.Singleline);
+
         return raw.Trim();
     }
 

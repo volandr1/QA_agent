@@ -3,6 +3,7 @@ using QA_agent.QaAgent.Core.Services;
 using QA_agent.QaAgent.Core.Tools;
 using QaAgent.Core.Models;
 
+
 namespace QA_agent.Web;
 
 public record LogEntry(string Time, string Message, string CssClass = "");
@@ -193,6 +194,20 @@ public class QaRunnerService
 
             var icon = run.Failed + run.Errors == 0 ? "✅" : "⚠️";
             AddLog($"{icon} {run.Passed} passed, {run.Failed} failed, {run.Errors} errors — {run.PassRate}% pass rate", run.Failed + run.Errors == 0 ? "log-ok" : "log-warn");
+
+            // Step 7: Telegram notification
+            if (_config.Telegram.IsConfigured)
+            {
+                AddLog("Sending Telegram notification...", "log-info");
+                NotifyChange();
+                var tgSvc = new TelegramNotificationService(_config.Telegram);
+                var tgErr = await tgSvc.SendAsync(run, ct);
+                if (tgErr is null)
+                    AddLog("📨 Telegram message sent", "log-ok");
+                else
+                    AddLog($"📨 Telegram failed: {tgErr}", "log-warn");
+            }
+
         }
         catch (OperationCanceledException)
         {

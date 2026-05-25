@@ -191,7 +191,7 @@ public sealed class TestGenerator
         try
         {
             var code = await _ollama.GenerateAsync(prompt, SystemPrompt, _temperature, _maxTokens, ct);
-            code = CleanCode(code);
+            code = CleanCode(code, _baseUrl);
 
             foreach (var scenario in scenarios)
             {
@@ -562,7 +562,7 @@ public sealed class TestGenerator
     /// Strips markdown code fences the LLM sometimes includes despite instructions.
     /// Also removes any prose before the first "using" statement.
     /// </summary>
-    private static string CleanCode(string raw)
+    private static string CleanCode(string raw, string baseUrl = "")
     {
         // Remove ```csharp ... ``` or ``` ... ```
         raw = Regex.Replace(raw, @"```[a-zA-Z]*\r?\n?", "", RegexOptions.Multiline);
@@ -577,7 +577,7 @@ public sealed class TestGenerator
         raw = StripTrailingProse(raw);
 
         // Auto-fix common LLM mistakes before handing to Roslyn
-        raw = ApplyCodeFixups(raw);
+        raw = ApplyCodeFixups(raw, baseUrl);
 
         return raw.Trim();
     }
@@ -605,7 +605,7 @@ public sealed class TestGenerator
     /// Автоматично виправляє найчастіші помилки які LLM генерує у HttpClient коді.
     /// Запускається ПЕРЕД компіляцією — зменшує кількість heal-спроб.
     /// </summary>
-    private static string ApplyCodeFixups(string code)
+    private static string ApplyCodeFixups(string code, string baseUrl = "")
     {
         // ── Додаємо відсутній using System.Net.Http.Headers ─────────────────
         if (!code.Contains("using System.Net.Http.Headers") &&
@@ -683,6 +683,53 @@ public sealed class TestGenerator
             code,
             @"new\s*\[\s*\]\s*\{[^}]+\}\.Contains\(\s*\(int\)\s*(\w+\.StatusCode)\s*\)",
             "(int)$1 >= 200 && (int)$1 < 300");
+
+        // ── Newtonsoft.Json → System.Text.Json ──────────────────────────────
+        // codellama часто генерує Newtonsoft який не підключений як залежність
+        code = code.Replace("using Newtonsoft.Json;", "using System.Text.Json;");
+        code = code.Replace("using Newtonsoft.Json.Linq;", "");
+        code = Regex.Replace(
+            code,
+            @"JsonConvert\.SerializeObject\(([^)]+)\)",
+            "JsonSerializer.Serialize($1)");
+        code = Regex.Replace(
+            code,
+            @"JsonConvert\.DeserializeObject<([^>]+)>\(([^)]+)\)",
+            "JsonSerializer.Deserialize<$1>($2)");
+        code = Regex.Replace(
+            code,
+            @"JsonConvert\.DeserializeObject\(([^)]+)\)",
+            "JsonSerializer.Deserialize<object>($1)");
+        // JObject.Parse → JsonDocument.Parse
+        code = Regex.Replace(
+            code,
+            @"JObject\.Parse\(([^)]+)\)",
+            "JsonDocument.Parse($1).RootElement");
+
+        // ── IDisposable на тест-класі → видаляємо ───────────────────────────
+        // xUnit test class не має реалізовувати IDisposable через Dispose()
+        code = Regex.Replace(
+            code,
+            @"\s*:\s*IDisposable",
+            "");
+        // Видаляємо public void Dispose() { ... } метод
+        code = Regex.Replace(
+            code,
+            @"[ \t]*public\s+void\s+Dispose\s*\(\s*\)\s*\{[^}]*\}\s*\r?\n",
+            "",
+            RegexOptions.Singleline);
+
+        // ── BaseUrl не оголошений → inject private const ─────────────────────
+        // Якщо модель використовує BaseUrl але не оголосила поле — додаємо
+        if (code.Contains("BaseUrl") &&
+            !Regex.IsMatch(code, @"(private\s+const\s+string\s+BaseUrl|var\s+BaseUrl\s*=|string\s+BaseUrl\s*=)"))
+        {
+            // Вставляємо const одразу після відкриваючої дужки класу
+            code = Regex.Replace(
+                code,
+                @"(class\s+\w+[^{]*\{)",
+                $"$1\n    private const string BaseUrl = \"{baseUrl}\";");
+        }
 
         // ── async Task<bool> → async Task (test methods не повертають bool) ──
         code = Regex.Replace(

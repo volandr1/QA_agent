@@ -19,6 +19,9 @@ public sealed class QaAgentConfig
 
     [JsonPropertyName("auth")]
     public AuthConfig Auth { get; set; } = new();
+
+    [JsonPropertyName("telegram")]
+    public TelegramConfig Telegram { get; set; } = new();
 }
 
 /// <summary>
@@ -132,6 +135,33 @@ public sealed class AuthConfig
         "basic"  => $"request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(\"Basic\", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(\"{BasicUsername}:{BasicPassword}\")));",
         _        => ""
     };
+}
+
+/// <summary>
+/// Telegram bot notification settings.
+/// </summary>
+public sealed class TelegramConfig
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>Bot token from @BotFather (e.g. "7123456789:AAF...").</summary>
+    [JsonPropertyName("botToken")]
+    public string BotToken { get; set; } = "";
+
+    /// <summary>Your personal chat ID (get via /getUpdates).</summary>
+    [JsonPropertyName("chatId")]
+    public string ChatId { get; set; } = "";
+
+    /// <summary>Send only when there are failures.</summary>
+    [JsonPropertyName("onlyOnFailure")]
+    public bool OnlyOnFailure { get; set; } = false;
+
+    [JsonIgnore]
+    public bool IsConfigured =>
+        Enabled &&
+        !string.IsNullOrWhiteSpace(BotToken) &&
+        !string.IsNullOrWhiteSpace(ChatId);
 }
 
 /// <summary>
