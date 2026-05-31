@@ -22,6 +22,9 @@ public sealed class QaAgentConfig
 
     [JsonPropertyName("telegram")]
     public TelegramConfig Telegram { get; set; } = new();
+
+    [JsonPropertyName("schedule")]
+    public ScheduleConfig Schedule { get; set; } = new();
 }
 
 /// <summary>
@@ -180,4 +183,32 @@ public sealed class OutputConfig
     /// <summary>Directory where Markdown reports are written (relative to cwd).</summary>
     [JsonPropertyName("reportDir")]
     public string ReportDir { get; set; } = ".";
+}
+
+/// <summary>
+/// Scheduled auto-run settings.
+/// </summary>
+public sealed class ScheduleConfig
+{
+    /// <summary>Enable automatic scheduled runs.</summary>
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>Interval between runs in hours.</summary>
+    [JsonPropertyName("intervalHours")]
+    public int IntervalHours { get; set; } = 24;
+
+    /// <summary>Swagger specification URL for scheduled runs.</summary>
+    [JsonPropertyName("swaggerUrl")]
+    public string SwaggerUrl { get; set; } = "";
+
+    /// <summary>Base URL of the API under test.</summary>
+    [JsonPropertyName("baseUrl")]
+    public string BaseUrl { get; set; } = "";
+
+    [JsonIgnore]
+    public bool IsConfigured =>
+        Enabled &&
+        !string.IsNullOrWhiteSpace(SwaggerUrl) &&
+        !string.IsNullOrWhiteSpace(BaseUrl);
 }

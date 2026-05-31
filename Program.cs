@@ -351,6 +351,7 @@ if (command == "web")
     builder.Services.AddSingleton(cfg);
     builder.Services.AddSingleton(new ReportService(historyDir));
     builder.Services.AddSingleton<QaRunnerService>();
+    builder.Services.AddHostedService<ScheduledRunnerService>();
 
     var app = builder.Build();
     app.UseStaticFiles();
