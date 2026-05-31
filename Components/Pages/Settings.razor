@@ -276,9 +276,13 @@
                 </div>
             </div>
             <div class="alert alert-info mt-3 py-2 small mb-0">
-                ℹ️ The scheduler starts counting after you save. First run will happen in
+                <strong>🧠 Smart mode:</strong> The agent checks for new or failed endpoints every
                 <strong>@Config.Schedule.IntervalHours hour(s)</strong>.
-                Results appear in History and Telegram (if configured).
+                <ul class="mb-0 mt-1">
+                    <li>✅ Already passed → <strong>skipped</strong> (no duplicate work)</li>
+                    <li>🆕 New endpoint added to API → <strong>tested automatically</strong></li>
+                    <li>❌ Previously failed → <strong>retested</strong></li>
+                </ul>
             </div>
         }
     </div>

@@ -11,8 +11,9 @@ public record RunRequest(
     string                  SwaggerUrl,
     string                  BaseUrl,
     string                  Model,
-    AuthConfig?             Auth         = null,
-    IReadOnlyList<string>?  SelectedTags = null);
+    AuthConfig?             Auth                = null,
+    IReadOnlyList<string>?  SelectedTags        = null,
+    bool                    SkipPassedEndpoints = false);
 
 public class QaRunnerService
 {
@@ -94,10 +95,40 @@ public class QaRunnerService
 
             var endpointsToTest = _config.Execution.MaxEndpoints > 0
                 ? filtered.Take(_config.Execution.MaxEndpoints).ToList()
-                : filtered;
+                : filtered.ToList();
 
             if (request.SelectedTags is { Count: > 0 })
                 AddLog($"Tag filter: [{string.Join(", ", request.SelectedTags)}] → {endpointsToTest.Count} endpoint(s).", "log-info");
+
+            // Smart filter: skip endpoints that already passed in a previous run
+            if (request.SkipPassedEndpoints)
+            {
+                var prevRun = await _reportService.GetPreviousRunAsync(request.BaseUrl);
+                if (prevRun is not null)
+                {
+                    var alreadyPassed = prevRun.Results
+                        .Where(r => r.Status == "Passed")
+                        .Select(r => r.EndpointLabel)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var before = endpointsToTest.Count;
+                    endpointsToTest = endpointsToTest
+                        .Where(e => !alreadyPassed.Contains(e.Label))
+                        .ToList();
+
+                    var skipped = before - endpointsToTest.Count;
+                    if (skipped > 0)
+                        AddLog($"⏭ Skipped {skipped} already-passed endpoint(s). Testing {endpointsToTest.Count} new/failed.", "log-info");
+
+                    if (endpointsToTest.Count == 0)
+                    {
+                        AddLog("✅ All endpoints already tested and passing. Nothing new to test.", "log-ok");
+                        Progress = 100;
+                        NotifyChange();
+                        return;
+                    }
+                }
+            }
 
             AddLog($"Found {parseResult.Endpoints.Count} endpoint(s), testing {endpointsToTest.Count}.", "log-ok");
             NotifyChange();
