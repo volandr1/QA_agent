@@ -206,6 +206,10 @@ public sealed class ScheduleConfig
     [JsonPropertyName("baseUrl")]
     public string BaseUrl { get; set; } = "";
 
+    /// <summary>How often to check the spec for changes (minutes). Min 1.</summary>
+    [JsonPropertyName("checkIntervalMinutes")]
+    public int CheckIntervalMinutes { get; set; } = 10;
+
     [JsonIgnore]
     public bool IsConfigured =>
         Enabled &&

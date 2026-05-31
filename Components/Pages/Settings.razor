@@ -272,7 +272,13 @@
                     <label class="form-label small fw-semibold">Interval (hours)</label>
                     <input class="form-control form-control-sm" type="number" min="1" max="168"
                            @bind="Config.Schedule.IntervalHours" />
-                    <div class="form-text">How often to run (1 = every hour, 24 = daily).</div>
+                    <div class="form-text">Auto-run interval (hours). Used by Scheduled Auto-Run only.</div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Monitor check interval (minutes)</label>
+                    <input class="form-control form-control-sm" type="number" min="1" max="1440"
+                           @bind="Config.Schedule.CheckIntervalMinutes" />
+                    <div class="form-text">How often to check for spec changes when monitoring (from Home page).</div>
                 </div>
             </div>
             <div class="alert alert-info mt-3 py-2 small mb-0">
