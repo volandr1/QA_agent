@@ -130,37 +130,45 @@ public sealed class TestGenerator
 
     private const string ChainSystemPrompt = """
         You are an expert C# QA engineer generating chained xUnit tests for REST APIs.
-        A chained test performs multiple sequential HTTP requests in ONE [Fact] method:
-        first login to obtain a JWT token, then call the protected endpoint with that token.
+        A chained test performs 3 sequential HTTP requests in ONE [Fact] method:
+        Step 1: Register a new user. Step 2: Login to get token. Step 3: Call protected endpoint.
 
         CRITICAL RULES:
-        1. Generate exactly ONE [Fact] method that chains both calls.
-        2. Use ONE shared HttpClient for both requests.
-        3. Step 1 — login and extract token using this EXACT pattern:
-              var loginBody = new { email = "admin@example.com", password = "Admin123!" };
-              var loginJson = JsonSerializer.Serialize(loginBody);
+        1. Generate exactly ONE [Fact] method with all 3 steps.
+        2. Use ONE shared HttpClient for all requests.
+        3. STEP 1 — Register a unique user (copy exactly):
+              var uniqueEmail = $"chain_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@test.com";
+              var regBody  = new { email = uniqueEmail, password = "Test1234!" };
+              var regJson  = JsonSerializer.Serialize(regBody);
+              var regContent = new StringContent(regJson, Encoding.UTF8, "application/json");
+              var regResp  = await client.PostAsync($"{BaseUrl}/REGISTER_PATH", regContent);
+              // Registration may return 200 or 201 — both are fine
+        4. STEP 2 — Login with the same credentials and extract token (copy exactly):
+              var loginBody    = new { email = uniqueEmail, password = "Test1234!" };
+              var loginJson    = JsonSerializer.Serialize(loginBody);
               var loginContent = new StringContent(loginJson, Encoding.UTF8, "application/json");
-              var loginResponse = await client.PostAsync($"{BaseUrl}/api/auth/login", loginContent);
-              var loginBodyStr = await loginResponse.Content.ReadAsStringAsync();
+              var loginResp    = await client.PostAsync($"{BaseUrl}/LOGIN_PATH", loginContent);
+              var loginStr     = await loginResp.Content.ReadAsStringAsync();
               string token = "";
               try {
-                  var doc = JsonDocument.Parse(loginBodyStr);
+                  var doc = JsonDocument.Parse(loginStr);
                   var root = doc.RootElement;
                   token = root.TryGetProperty("token",        out var t1) ? t1.GetString() ?? "" :
                           root.TryGetProperty("accessToken",  out var t2) ? t2.GetString() ?? "" :
                           root.TryGetProperty("access_token", out var t3) ? t3.GetString() ?? "" :
                           root.TryGetProperty("jwt",          out var t4) ? t4.GetString() ?? "" : "";
               } catch { }
-        4. Step 2 — set Bearer token and call protected endpoint:
+        5. STEP 3 — Call protected endpoint with Bearer token (copy exactly):
               client.DefaultRequestHeaders.Authorization =
                   new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        5. Assert protected endpoint using EXACTLY this pattern:
+              // Now make the actual protected request
+        6. Assert the protected endpoint result:
               var statusCode = (int)response.StatusCode;
               var body = await response.Content.ReadAsStringAsync();
               Assert.True(statusCode >= 200 && statusCode < 300,
                   $"Expected 2xx but got {statusCode}: {body}");
-        6. Output ONLY raw C# code. No markdown. No explanation.
-        7. Class name must end with "ChainTests". Namespace: QA_agent.GeneratedTests
+        7. Output ONLY raw C# code. No markdown. No explanation.
+        8. Class name must end with "ChainTests". Namespace: QA_agent.GeneratedTests
         """;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -205,10 +213,11 @@ public sealed class TestGenerator
     {
         var results = new List<TestCase>();
 
-        // Detect login endpoint once — used for chain tests
-        var loginEndpoint = FindLoginEndpoint(endpoints);
+        // Detect login and register endpoints once — used for chain tests
+        var loginEndpoint    = FindLoginEndpoint(endpoints);
+        var registerEndpoint = FindRegisterEndpoint(endpoints);
         if (loginEndpoint is not null)
-            Log($"🔗 Detected login endpoint: {loginEndpoint.Label} — chain tests enabled");
+            Log($"🔗 Login: {loginEndpoint.Label} | Register: {registerEndpoint?.Label ?? "not found"} — chain tests enabled");
 
         foreach (var endpoint in endpoints)
         {
@@ -226,7 +235,7 @@ public sealed class TestGenerator
                 && !IsSameEndpoint(endpoint, loginEndpoint))
             {
                 Log($"  🔗 Generating auth-chain test for {endpoint.Label}...");
-                var chainCase = await GenerateChainTestAsync(loginEndpoint, endpoint, ct);
+                var chainCase = await GenerateChainTestAsync(loginEndpoint, endpoint, ct, registerEndpoint);
                 results.Add(chainCase);
             }
 
@@ -261,12 +270,20 @@ public sealed class TestGenerator
     //  Chain test generation
     // ─────────────────────────────────────────────────────────────────────────
 
+    private static ApiEndpoint? FindRegisterEndpoint(IReadOnlyList<ApiEndpoint> endpoints) =>
+        endpoints.FirstOrDefault(e =>
+            e.Method == "POST" &&
+            (e.Path.Contains("register", StringComparison.OrdinalIgnoreCase) ||
+             e.Path.Contains("signup",   StringComparison.OrdinalIgnoreCase) ||
+             e.Path.Contains("sign-up",  StringComparison.OrdinalIgnoreCase)));
+
     private async Task<TestCase> GenerateChainTestAsync(
         ApiEndpoint loginEndpoint,
         ApiEndpoint protectedEndpoint,
-        CancellationToken ct)
+        CancellationToken ct,
+        ApiEndpoint? registerEndpoint = null)
     {
-        var prompt = BuildChainPrompt(loginEndpoint, protectedEndpoint);
+        var prompt = BuildChainPrompt(loginEndpoint, protectedEndpoint, registerEndpoint);
 
         try
         {
@@ -402,12 +419,31 @@ public sealed class TestGenerator
 
         if (hasRequiredBody && endpoint.Method is "POST" or "PUT" or "PATCH")
         {
-            var badRequestCode = GetResponseCode(endpoint, new[] { "400", "422", "405" }, 400);
+            // Smart code selection: prefer 400/422, but use 401 if that's all the spec has
+            // (login endpoints often return 401 for all errors, not 400)
+            var badRequestCode = endpoint.Responses.ContainsKey("400") ? 400 :
+                                 endpoint.Responses.ContainsKey("422") ? 422 :
+                                 endpoint.Responses.ContainsKey("401") ? 401 : 400;
+
+            // Determine if this is a login-type endpoint that returns 401 for everything
+            var isLoginType = endpoint.Path.Contains("login",    StringComparison.OrdinalIgnoreCase) ||
+                              endpoint.Path.Contains("signin",   StringComparison.OrdinalIgnoreCase) ||
+                              endpoint.Path.Contains("token",    StringComparison.OrdinalIgnoreCase) ||
+                              endpoint.Path.Contains("auth",     StringComparison.OrdinalIgnoreCase);
+
+            var acceptNote = isLoginType
+                ? $"Expected status: {badRequestCode} (or 401 if API returns 401 for all auth errors). Accept BOTH 400 and 401."
+                : $"Send request with empty JSON body {{}}. Expected status: {badRequestCode}";
+
+            var acceptedNote = isLoginType
+                ? $"Accept 400 OR 401 — use: Assert.True(statusCode == 400 || statusCode == 401, ...)"
+                : $"Expected status: {badRequestCode}";
+
             scenarios.Add(new ScenarioPlan(
                 $"Returns {badRequestCode} when required body fields are missing",
                 TestScenarioType.MissingRequired,
                 badRequestCode,
-                $"Send request with empty JSON body {{}}. Expected status: {badRequestCode}"));
+                $"Send request with empty JSON body {{}}. {acceptNote}\n     {acceptedNote}"));
         }
 
         // ── Missing required query param ─────────────────────────────────────
@@ -457,33 +493,50 @@ public sealed class TestGenerator
     //  Chain prompt builder
     // ─────────────────────────────────────────────────────────────────────────
 
-    private string BuildChainPrompt(ApiEndpoint loginEndpoint, ApiEndpoint protectedEndpoint)
+    private string BuildChainPrompt(ApiEndpoint loginEndpoint, ApiEndpoint protectedEndpoint,
+        ApiEndpoint? registerEndpoint = null)
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine("Generate a C# xUnit chain test that:");
-        sb.AppendLine("  1. Calls the LOGIN endpoint to get a JWT token");
-        sb.AppendLine("  2. Uses that token to call the PROTECTED endpoint");
+        var hasRegister = registerEndpoint is not null;
+
+        sb.AppendLine(hasRegister
+            ? "Generate a C# xUnit chain test that does 3 steps: Register → Login → Call protected endpoint"
+            : "Generate a C# xUnit chain test that does 2 steps: Login → Call protected endpoint");
         sb.AppendLine();
 
-        // Login endpoint info
-        sb.AppendLine("═══ STEP 1: LOGIN ENDPOINT ═══");
+        // Step 1: Register (if available)
+        if (hasRegister)
+        {
+            sb.AppendLine("═══ STEP 1: REGISTER A NEW USER ═══");
+            sb.AppendLine($"  Method: {registerEndpoint!.Method}");
+            sb.AppendLine($"  URL:    {_baseUrl}{registerEndpoint.Path}");
+            sb.AppendLine("  Use unique timestamp-based email:");
+            sb.AppendLine("  var uniqueEmail = $\"chain_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@test.com\";");
+            sb.AppendLine("  var regBody = new { email = uniqueEmail, password = \"Test1234!\" };");
+            sb.AppendLine("  Registration may return 200 or 201 — both are OK, do NOT assert it strictly.");
+            sb.AppendLine();
+        }
+
+        // Step 2: Login
+        var loginStep = hasRegister ? "STEP 2" : "STEP 1";
+        sb.AppendLine($"═══ {loginStep}: LOGIN ═══");
         sb.AppendLine($"  Method: {loginEndpoint.Method}");
         sb.AppendLine($"  URL:    {_baseUrl}{loginEndpoint.Path}");
-
-        var loginBody = loginEndpoint.Parameters.FirstOrDefault(p => p.Location == "body");
-        if (loginBody?.SchemaJson is not null)
-            sb.AppendLine($"  Body schema: {loginBody.SchemaJson}");
-
-        sb.AppendLine("  Use credentials that EXIST in the database:");
-        sb.AppendLine("  email='admin@example.com', password='Admin123!'");
-        sb.AppendLine("  OR use whatever credentials were registered in previous tests.");
-        sb.AppendLine("  DO NOT use timestamp-based email here — the user must already exist.");
-        sb.AppendLine("  After login: extract JWT token from response JSON (try: token, accessToken, access_token, jwt)");
+        if (hasRegister)
+        {
+            sb.AppendLine("  Use the SAME uniqueEmail and \"Test1234!\" from Step 1.");
+        }
+        else
+        {
+            sb.AppendLine("  Credentials: email='admin@example.com', password='Admin123!'");
+        }
+        sb.AppendLine("  Extract token from response (try: token, accessToken, access_token, jwt).");
         sb.AppendLine();
 
         // Protected endpoint info
-        sb.AppendLine("═══ STEP 2: PROTECTED ENDPOINT ═══");
+        var protStep = hasRegister ? "STEP 3" : "STEP 2";
+        sb.AppendLine($"═══ {protStep}: PROTECTED ENDPOINT ═══");
         sb.AppendLine($"  Method: {protectedEndpoint.Method}");
         sb.AppendLine($"  URL:    {_baseUrl}{protectedEndpoint.Path}");
         sb.AppendLine("  Add header: Authorization: Bearer <token from step 1>");
