@@ -1148,29 +1148,24 @@ public sealed class TestGenerator
             "Assert.True((int)$2 == $1, $3)",
             RegexOptions.Singleline);
 
-        // Assert.InRange — будь-який варіант з StatusCode (з або без cast, з або без message)
-        // xUnit не має overload з string-повідомленням і не може порівнювати HttpStatusCode з int
+        // ── Universal Assert.InRange replacement ─────────────────────────────
+        // Covers ALL forms — xUnit has no string-message overload for InRange,
+        // and cannot compare HttpStatusCode directly with int bounds.
+        // Pattern: Assert.InRange( [optional (int)] actual , low , high [, optional msg] )
         code = Regex.Replace(
             code,
-            @"Assert\.InRange\s*\([^)]*StatusCode[^)]*\)",
-            "Assert.True((int)response.StatusCode >= 200 && (int)response.StatusCode < 300, " +
-            "$\"Expected 2xx but got {(int)response.StatusCode}\")",
-            RegexOptions.Singleline);
-
-        // Assert.InRange((int)var, low, high, "message") — немає такого overload
-        code = Regex.Replace(
-            code,
-            @"Assert\.InRange\(\s*\(int\)\s*(\w+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*\$?@?""[^""]*""\s*\)",
-            "Assert.True((int)$1 >= $2 && (int)$1 <= $3, " +
-            "$\"Expected between $2 and $3 but got {(int)$1}\")",
-            RegexOptions.Singleline);
-
-        // Assert.InRange(var, low, high) — базовий варіант
-        code = Regex.Replace(
-            code,
-            @"Assert\.InRange\(\s*(\w+\.StatusCode)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
-            "Assert.True((int)$1 >= $2 && (int)$1 <= $3, " +
-            "$\"Expected status between $2 and $3 but got {(int)$1}\")",
+            @"Assert\.InRange\s*\(\s*(?:\(int\)\s*)?(\w+(?:\.\w+)*)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*(?:\$?@?""[^""]*""|\$?[^)]+))?\s*\)",
+            m =>
+            {
+                var actual = m.Groups[1].Value.Trim();
+                var low    = m.Groups[2].Value;
+                var high   = m.Groups[3].Value;
+                // Use (int) cast only for StatusCode properties
+                var cast   = actual.EndsWith("StatusCode", StringComparison.OrdinalIgnoreCase)
+                             ? "(int)" : "";
+                return $"Assert.True({cast}{actual} >= {low} && {cast}{actual} <= {high}, " +
+                       $"$\"Expected between {low} and {high} but got {{{cast}{actual}}}\")";
+            },
             RegexOptions.Singleline);
 
         // Assert.Equal(number, anyVar, string) — загальний випадок (змінна типу statusCode)
