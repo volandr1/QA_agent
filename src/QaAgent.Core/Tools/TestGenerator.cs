@@ -216,8 +216,13 @@ public sealed class TestGenerator
             var cases = await GenerateForEndpointAsync(endpoint, ct);
             results.AddRange(cases);
 
-            // If endpoint requires auth AND we found a login endpoint → generate chain test
-            if (endpoint.RequiresAuth && loginEndpoint is not null
+            // Generate chain test if endpoint requires auth OR has 401 in responses
+            // (some APIs don't mark RequiresAuth in spec but still return 401)
+            var needsAuth = endpoint.RequiresAuth
+                         || endpoint.Responses.ContainsKey("401")
+                         || endpoint.Responses.ContainsKey("403");
+
+            if (needsAuth && loginEndpoint is not null
                 && !IsSameEndpoint(endpoint, loginEndpoint))
             {
                 Log($"  🔗 Generating auth-chain test for {endpoint.Label}...");
@@ -412,14 +417,20 @@ public sealed class TestGenerator
 
         if (requiredQueryParams.Any())
         {
-            var badRequestCode = GetResponseCode(endpoint, new[] { "400", "422" }, 400);
-            var paramNames     = string.Join(", ", requiredQueryParams.Select(p => p.Name));
-            scenarios.Add(new ScenarioPlan(
-                $"Returns {badRequestCode} when required query params are missing",
-                TestScenarioType.MissingRequired,
-                badRequestCode,
-                $"Omit ALL required query parameters ({paramNames}). " +
-                $"Expected status: {badRequestCode}"));
+            // Check if the spec has 400 response — if not, API may return 200 for missing params
+            var has400 = endpoint.Responses.ContainsKey("400") || endpoint.Responses.ContainsKey("422");
+            if (has400)
+            {
+                var badRequestCode = GetResponseCode(endpoint, new[] { "400", "422" }, 400);
+                var paramNames     = string.Join(", ", requiredQueryParams.Select(p => p.Name));
+                scenarios.Add(new ScenarioPlan(
+                    $"Returns {badRequestCode} when required query params are missing",
+                    TestScenarioType.MissingRequired,
+                    badRequestCode,
+                    $"Omit ALL required query parameters ({paramNames}). " +
+                    $"Expected status: {badRequestCode}"));
+            }
+            // If no 400 in spec, skip this scenario — API likely returns 200 with empty result
         }
 
         // ── Invalid enum value ────────────────────────────────────────────────
@@ -462,14 +473,12 @@ public sealed class TestGenerator
 
         var loginBody = loginEndpoint.Parameters.FirstOrDefault(p => p.Location == "body");
         if (loginBody?.SchemaJson is not null)
-        {
             sb.AppendLine($"  Body schema: {loginBody.SchemaJson}");
-            sb.AppendLine("  Use realistic credentials: email='admin@example.com', password='Admin123!'");
-        }
-        else
-        {
-            sb.AppendLine("  Body: { \"email\": \"admin@example.com\", \"password\": \"Admin123!\" }");
-        }
+
+        sb.AppendLine("  Use credentials that EXIST in the database:");
+        sb.AppendLine("  email='admin@example.com', password='Admin123!'");
+        sb.AppendLine("  OR use whatever credentials were registered in previous tests.");
+        sb.AppendLine("  DO NOT use timestamp-based email here — the user must already exist.");
         sb.AppendLine("  After login: extract JWT token from response JSON (try: token, accessToken, access_token, jwt)");
         sb.AppendLine();
 
@@ -647,6 +656,22 @@ public sealed class TestGenerator
         sb.AppendLine("  var body = await response.Content.ReadAsStringAsync();");
         sb.AppendLine("  Assert.True(statusCode >= 200 && statusCode < 300,");
         sb.AppendLine("    $\"Expected 2xx success but got {statusCode}: {body}\");");
+
+        // ── Unique email for registration endpoints ───────────────────────────
+        var isRegisterEndpoint = endpoint.Method is "POST" &&
+            (endpoint.Path.Contains("register", StringComparison.OrdinalIgnoreCase) ||
+             endpoint.Path.Contains("signup",   StringComparison.OrdinalIgnoreCase) ||
+             endpoint.Path.Contains("sign-up",  StringComparison.OrdinalIgnoreCase));
+
+        if (isRegisterEndpoint)
+        {
+            sb.AppendLine();
+            sb.AppendLine("⚠ UNIQUE EMAIL RULE — MANDATORY:");
+            sb.AppendLine("  This is a registration endpoint. Use a UNIQUE timestamp-based email");
+            sb.AppendLine("  to avoid 'email already exists' errors on repeated test runs:");
+            sb.AppendLine("  var email = $\"test_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@example.com\";");
+            sb.AppendLine("  Use this 'email' variable in the request body — do NOT hardcode the email string.");
+        }
 
         // ── Example request body (якщо є body-параметр) ─────────────────────
         var bodyParam = endpoint.Parameters.FirstOrDefault(p => p.Location == "body");
@@ -976,7 +1001,24 @@ public sealed class TestGenerator
             "Assert.True((int)$2 == $1, $3)",
             RegexOptions.Singleline);
 
-        // Assert.InRange(response.StatusCode, 200, 299) — HttpStatusCode не int
+        // Assert.InRange — будь-який варіант з StatusCode (з або без cast, з або без message)
+        // xUnit не має overload з string-повідомленням і не може порівнювати HttpStatusCode з int
+        code = Regex.Replace(
+            code,
+            @"Assert\.InRange\s*\([^)]*StatusCode[^)]*\)",
+            "Assert.True((int)response.StatusCode >= 200 && (int)response.StatusCode < 300, " +
+            "$\"Expected 2xx but got {(int)response.StatusCode}\")",
+            RegexOptions.Singleline);
+
+        // Assert.InRange((int)var, low, high, "message") — немає такого overload
+        code = Regex.Replace(
+            code,
+            @"Assert\.InRange\(\s*\(int\)\s*(\w+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*\$?@?""[^""]*""\s*\)",
+            "Assert.True((int)$1 >= $2 && (int)$1 <= $3, " +
+            "$\"Expected between $2 and $3 but got {(int)$1}\")",
+            RegexOptions.Singleline);
+
+        // Assert.InRange(var, low, high) — базовий варіант
         code = Regex.Replace(
             code,
             @"Assert\.InRange\(\s*(\w+\.StatusCode)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
