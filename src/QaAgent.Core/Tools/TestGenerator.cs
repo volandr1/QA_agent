@@ -43,6 +43,37 @@ public sealed class TestGenerator
         12. Do NOT use ConfigureAwait(false) — keep it simple.
 
         ══════════════════════════════════════════════════════════
+        FORBIDDEN PATTERNS — NEVER USE THESE (cause compile errors):
+        ══════════════════════════════════════════════════════════
+
+        ❌ WRONG testing framework methods — xUnit ONLY, never MSTest/NUnit:
+            Assert.IsTrue(...)       → CORRECT: Assert.True(...)
+            Assert.IsFalse(...)      → CORRECT: Assert.False(...)
+            Assert.IsNull(...)       → CORRECT: Assert.Null(...)
+            Assert.IsNotNull(...)    → CORRECT: Assert.NotNull(...)
+            Assert.AreEqual(...)     → CORRECT: Assert.Equal(...)
+            Assert.AreNotEqual(...)  → CORRECT: Assert.NotEqual(...)
+            [TestMethod]             → CORRECT: [Fact]
+            [TestClass]              → CORRECT: public class ...Tests
+
+        ❌ WRONG namespaces — these assemblies are NOT available:
+            using Microsoft.VisualStudio.*;
+            using Microsoft.VisualBasic.*;
+            using Microsoft.AspNetCore.*;
+            using Microsoft.Extensions.DependencyInjection;
+            using NUnit.Framework;
+            using MSTest;
+
+        ❌ WRONG HttpClient disposal — IDisposable only, NOT IAsyncDisposable:
+            await using var client = new HttpClient()  → CORRECT: using var client = new HttpClient()
+            await client.DisposeAsync()                → CORRECT: just let using block dispose it
+
+        ❌ WRONG test class patterns:
+            : IClassFixture<T>                         → REMOVE — not supported
+            public MyTests(SomeService svc) { }        → REMOVE — no constructor params allowed
+            : IDisposable                              → REMOVE — not needed
+
+        ══════════════════════════════════════════════════════════
         ASSERTION RULES — MANDATORY (copy exactly):
         ══════════════════════════════════════════════════════════
 
@@ -169,12 +200,17 @@ public sealed class TestGenerator
                   $"Expected 2xx but got {statusCode}: {body}");
         7. Output ONLY raw C# code. No markdown. No explanation.
         8. Class name must end with "ChainTests". Namespace: QA_agent.GeneratedTests
-        9. FORBIDDEN patterns — these cause compile errors:
-           ❌ await using var client = new HttpClient() — use: using var client = new HttpClient()
-           ❌ using Microsoft.VisualStudio.* — forbidden, not available
-           ❌ Constructor with parameters in test class — class must have NO constructor
-           ❌ client.DisposeAsync() — HttpClient has no DisposeAsync
-           ❌ IClassFixture<T> — not supported, do not use
+        9. FORBIDDEN — these cause compile errors, NEVER use:
+           ❌ await using var client = new HttpClient()  → use: using var client = new HttpClient()
+           ❌ using Microsoft.VisualStudio.*;             → forbidden
+           ❌ using Microsoft.AspNetCore.*;               → forbidden
+           ❌ using NUnit.Framework;                      → forbidden
+           ❌ Constructor with parameters in test class  → class must have NO constructor
+           ❌ client.DisposeAsync()                       → HttpClient has no DisposeAsync
+           ❌ IClassFixture<T>                            → not supported
+           ❌ Assert.IsTrue(...)                          → use Assert.True(...)
+           ❌ Assert.AreEqual(...)                        → use Assert.Equal(...)
+           ❌ Assert.IsNull(...)                          → use Assert.Null(...)
         """;
 
     // ─────────────────────────────────────────────────────────────────────────
