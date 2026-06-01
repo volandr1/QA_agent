@@ -125,6 +125,45 @@ public sealed class TestGenerator
         """;
 
     // ─────────────────────────────────────────────────────────────────────────
+    //  Chain system prompt
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private const string ChainSystemPrompt = """
+        You are an expert C# QA engineer generating chained xUnit tests for REST APIs.
+        A chained test performs multiple sequential HTTP requests in ONE [Fact] method:
+        first login to obtain a JWT token, then call the protected endpoint with that token.
+
+        CRITICAL RULES:
+        1. Generate exactly ONE [Fact] method that chains both calls.
+        2. Use ONE shared HttpClient for both requests.
+        3. Step 1 — login and extract token using this EXACT pattern:
+              var loginBody = new { email = "admin@example.com", password = "Admin123!" };
+              var loginJson = JsonSerializer.Serialize(loginBody);
+              var loginContent = new StringContent(loginJson, Encoding.UTF8, "application/json");
+              var loginResponse = await client.PostAsync($"{BaseUrl}/api/auth/login", loginContent);
+              var loginBodyStr = await loginResponse.Content.ReadAsStringAsync();
+              string token = "";
+              try {
+                  var doc = JsonDocument.Parse(loginBodyStr);
+                  var root = doc.RootElement;
+                  token = root.TryGetProperty("token",        out var t1) ? t1.GetString() ?? "" :
+                          root.TryGetProperty("accessToken",  out var t2) ? t2.GetString() ?? "" :
+                          root.TryGetProperty("access_token", out var t3) ? t3.GetString() ?? "" :
+                          root.TryGetProperty("jwt",          out var t4) ? t4.GetString() ?? "" : "";
+              } catch { }
+        4. Step 2 — set Bearer token and call protected endpoint:
+              client.DefaultRequestHeaders.Authorization =
+                  new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        5. Assert protected endpoint using EXACTLY this pattern:
+              var statusCode = (int)response.StatusCode;
+              var body = await response.Content.ReadAsStringAsync();
+              Assert.True(statusCode >= 200 && statusCode < 300,
+                  $"Expected 2xx but got {statusCode}: {body}");
+        6. Output ONLY raw C# code. No markdown. No explanation.
+        7. Class name must end with "ChainTests". Namespace: QA_agent.GeneratedTests
+        """;
+
+    // ─────────────────────────────────────────────────────────────────────────
     //  Fields
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -158,6 +197,7 @@ public sealed class TestGenerator
 
     /// <summary>
     /// Generates test cases for all provided endpoints.
+    /// Also generates AuthChain tests for protected endpoints when a login endpoint is found.
     /// </summary>
     public async Task<List<TestCase>> GenerateForAllAsync(
         IReadOnlyList<ApiEndpoint> endpoints,
@@ -165,15 +205,92 @@ public sealed class TestGenerator
     {
         var results = new List<TestCase>();
 
+        // Detect login endpoint once — used for chain tests
+        var loginEndpoint = FindLoginEndpoint(endpoints);
+        if (loginEndpoint is not null)
+            Log($"🔗 Detected login endpoint: {loginEndpoint.Label} — chain tests enabled");
+
         foreach (var endpoint in endpoints)
         {
             Log($"Generating tests for {endpoint.Label}...");
             var cases = await GenerateForEndpointAsync(endpoint, ct);
             results.AddRange(cases);
+
+            // If endpoint requires auth AND we found a login endpoint → generate chain test
+            if (endpoint.RequiresAuth && loginEndpoint is not null
+                && !IsSameEndpoint(endpoint, loginEndpoint))
+            {
+                Log($"  🔗 Generating auth-chain test for {endpoint.Label}...");
+                var chainCase = await GenerateChainTestAsync(loginEndpoint, endpoint, ct);
+                results.Add(chainCase);
+            }
+
             Log($"  → {cases.Count} test(s) planned");
         }
 
         return results;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Login endpoint detection
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Detects the login/auth endpoint from the spec.
+    /// Looks for POST endpoints whose path contains login/signin/auth/token keywords.
+    /// </summary>
+    private static ApiEndpoint? FindLoginEndpoint(IReadOnlyList<ApiEndpoint> endpoints)
+    {
+        var loginKeywords = new[] { "login", "signin", "sign-in", "auth/token", "token", "authenticate" };
+
+        return endpoints.FirstOrDefault(e =>
+            e.Method == "POST" &&
+            loginKeywords.Any(kw =>
+                e.Path.Contains(kw, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool IsSameEndpoint(ApiEndpoint a, ApiEndpoint b) =>
+        a.Method == b.Method && a.Path == b.Path;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Chain test generation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private async Task<TestCase> GenerateChainTestAsync(
+        ApiEndpoint loginEndpoint,
+        ApiEndpoint protectedEndpoint,
+        CancellationToken ct)
+    {
+        var prompt = BuildChainPrompt(loginEndpoint, protectedEndpoint);
+
+        try
+        {
+            var code = await _ollama.GenerateAsync(prompt, ChainSystemPrompt, _temperature, _maxTokens, ct);
+            code = CleanCode(code, _baseUrl);
+
+            return new TestCase
+            {
+                Endpoint           = protectedEndpoint,
+                ScenarioName       = $"AuthChain_LoginThen_{ToPascalCase(protectedEndpoint.Method)}",
+                ScenarioType       = TestScenarioType.AuthChain,
+                ExpectedStatusCode = 200,
+                GeneratedCode      = code,
+                Notes              = $"Chain: {loginEndpoint.Label} → {protectedEndpoint.Label}"
+            };
+        }
+        catch (Exception ex)
+        {
+            Log($"  [ERROR] Chain test generation failed: {ex.Message}");
+            return new TestCase
+            {
+                Endpoint           = protectedEndpoint,
+                ScenarioName       = "AuthChain_GenerationFailed",
+                ScenarioType       = TestScenarioType.AuthChain,
+                ExpectedStatusCode = 200,
+                GeneratedCode      = null,
+                Notes              = ex.Message
+            };
+        }
     }
 
     /// <summary>
@@ -323,6 +440,72 @@ public sealed class TestGenerator
         }
 
         return scenarios;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Chain prompt builder
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private string BuildChainPrompt(ApiEndpoint loginEndpoint, ApiEndpoint protectedEndpoint)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Generate a C# xUnit chain test that:");
+        sb.AppendLine("  1. Calls the LOGIN endpoint to get a JWT token");
+        sb.AppendLine("  2. Uses that token to call the PROTECTED endpoint");
+        sb.AppendLine();
+
+        // Login endpoint info
+        sb.AppendLine("═══ STEP 1: LOGIN ENDPOINT ═══");
+        sb.AppendLine($"  Method: {loginEndpoint.Method}");
+        sb.AppendLine($"  URL:    {_baseUrl}{loginEndpoint.Path}");
+
+        var loginBody = loginEndpoint.Parameters.FirstOrDefault(p => p.Location == "body");
+        if (loginBody?.SchemaJson is not null)
+        {
+            sb.AppendLine($"  Body schema: {loginBody.SchemaJson}");
+            sb.AppendLine("  Use realistic credentials: email='admin@example.com', password='Admin123!'");
+        }
+        else
+        {
+            sb.AppendLine("  Body: { \"email\": \"admin@example.com\", \"password\": \"Admin123!\" }");
+        }
+        sb.AppendLine("  After login: extract JWT token from response JSON (try: token, accessToken, access_token, jwt)");
+        sb.AppendLine();
+
+        // Protected endpoint info
+        sb.AppendLine("═══ STEP 2: PROTECTED ENDPOINT ═══");
+        sb.AppendLine($"  Method: {protectedEndpoint.Method}");
+        sb.AppendLine($"  URL:    {_baseUrl}{protectedEndpoint.Path}");
+        sb.AppendLine("  Add header: Authorization: Bearer <token from step 1>");
+
+        var pathParams = protectedEndpoint.Parameters.Where(p => p.Location == "path").ToList();
+        if (pathParams.Any())
+        {
+            sb.AppendLine("  Path parameters (declare before using in URL):");
+            foreach (var p in pathParams)
+                sb.AppendLine($"    var {p.Name} = {GetExampleValue(p)};");
+        }
+
+        var protectedBody = protectedEndpoint.Parameters.FirstOrDefault(p => p.Location == "body");
+        if (protectedBody?.SchemaJson is not null)
+            sb.AppendLine($"  Body schema: {protectedBody.SchemaJson}");
+
+        if (protectedEndpoint.Responses.Any())
+        {
+            sb.AppendLine("  Expected responses:");
+            foreach (var (code, desc) in protectedEndpoint.Responses)
+                sb.AppendLine($"    HTTP {code} → {desc}");
+        }
+        sb.AppendLine();
+
+        // Class name
+        var className = $"{ToPascalCase(protectedEndpoint.OperationId ?? protectedEndpoint.Method + protectedEndpoint.Path.Replace("/", "_").Trim('_'))}ChainTests";
+        sb.AppendLine($"Class name: {className}");
+        sb.AppendLine("Namespace: QA_agent.GeneratedTests");
+        sb.AppendLine($"private const string BaseUrl = \"{_baseUrl}\";");
+
+        return sb.ToString();
     }
 
     // ─────────────────────────────────────────────────────────────────────────

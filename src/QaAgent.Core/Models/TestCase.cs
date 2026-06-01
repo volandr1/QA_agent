@@ -76,5 +76,12 @@ public enum TestScenarioType
     Conflict,
 
     /// <summary>Any other custom scenario.</summary>
-    Custom
+    Custom,
+
+    /// <summary>
+    /// Chained scenario: first obtains an auth token via login endpoint,
+    /// then calls the protected endpoint using that token.
+    /// Solves the login→token→use pattern automatically.
+    /// </summary>
+    AuthChain
 }
