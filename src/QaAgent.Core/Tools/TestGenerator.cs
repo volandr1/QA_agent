@@ -1009,12 +1009,20 @@ public sealed class TestGenerator
         code = Regex.Replace(code, @"await\s+using\s+var\s+(\w+)\s*=\s*new\s+HttpClient\b",
             "using var $1 = new HttpClient");
 
-        // ── using Microsoft.VisualStudio.* → remove ──────────────────────────
-        // LLM sometimes adds MSTest/VisualStudio namespaces — not available in Roslyn context
-        code = Regex.Replace(code,
-            @"[ \t]*using\s+Microsoft\.VisualStudio[^;\n]*;\s*\r?\n", "");
-        code = Regex.Replace(code,
-            @"[ \t]*using\s+Microsoft\.VisualBasic[^;\n]*;\s*\r?\n", "");
+        // ── Remove test-framework namespaces not available in Roslyn context ───
+        // LLM sometimes adds MSTest / AspNetCore.Mvc.Testing / VisualStudio namespaces
+        var forbiddenUsings = new[]
+        {
+            @"Microsoft\.VisualStudio",
+            @"Microsoft\.VisualBasic",
+            @"Microsoft\.AspNetCore\.Mvc\.Testing",
+            @"Microsoft\.AspNetCore\.TestHost",
+            @"Microsoft\.Extensions\.DependencyInjection",
+            @"NUnit\.Framework",
+            @"MSTest",
+        };
+        foreach (var ns in forbiddenUsings)
+            code = Regex.Replace(code, $@"[ \t]*using\s+{ns}[^;\n]*;\s*\r?\n", "");
 
         // ── Remove parameterized constructors from test classes ───────────────
         // Activator.CreateInstance() requires parameterless constructor.
