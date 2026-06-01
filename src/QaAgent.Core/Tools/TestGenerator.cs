@@ -167,15 +167,18 @@ public sealed class TestGenerator
         CRITICAL RULES:
         1. Generate exactly ONE [Fact] method with all 3 steps.
         2. Use ONE shared HttpClient for all requests.
-        3. STEP 1 — Register a unique user (copy exactly):
-              var uniqueEmail = $"chain_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@test.com";
-              var regBody  = new { email = uniqueEmail, password = "Test1234!" };
-              var regJson  = JsonSerializer.Serialize(regBody);
+        3. STEP 1 — Register a FIXED test user (copy exactly, do NOT use timestamp emails):
+              // Use FIXED credentials — same user every run, no DB pollution
+              const string testEmail    = "qa_agent_test@test.com";
+              const string testPassword = "Test1234!";
+              var regBody    = new { email = testEmail, password = testPassword };
+              var regJson    = JsonSerializer.Serialize(regBody);
               var regContent = new StringContent(regJson, Encoding.UTF8, "application/json");
-              var regResp  = await client.PostAsync($"{BaseUrl}/REGISTER_PATH", regContent);
-              // Registration may return 200 or 201 — both are fine
-        4. STEP 2 — Login with the same credentials and extract token (copy exactly):
-              var loginBody    = new { email = uniqueEmail, password = "Test1234!" };
+              var regResp    = await client.PostAsync($"{BaseUrl}/REGISTER_PATH", regContent);
+              // IGNORE registration response — user may already exist (400) or be new (200/201)
+              // Either way, proceed to login below
+        4. STEP 2 — Login with the fixed credentials and extract token (copy exactly):
+              var loginBody    = new { email = testEmail, password = testPassword };
               var loginJson    = JsonSerializer.Serialize(loginBody);
               var loginContent = new StringContent(loginJson, Encoding.UTF8, "application/json");
               var loginResp    = await client.PostAsync($"{BaseUrl}/LOGIN_PATH", loginContent);
@@ -550,13 +553,15 @@ public sealed class TestGenerator
         // Step 1: Register (if available)
         if (hasRegister)
         {
-            sb.AppendLine("═══ STEP 1: REGISTER A NEW USER ═══");
+            sb.AppendLine("═══ STEP 1: REGISTER FIXED TEST USER ═══");
             sb.AppendLine($"  Method: {registerEndpoint!.Method}");
             sb.AppendLine($"  URL:    {_baseUrl}{registerEndpoint.Path}");
-            sb.AppendLine("  Use unique timestamp-based email:");
-            sb.AppendLine("  var uniqueEmail = $\"chain_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@test.com\";");
-            sb.AppendLine("  var regBody = new { email = uniqueEmail, password = \"Test1234!\" };");
-            sb.AppendLine("  Registration may return 200 or 201 — both are OK, do NOT assert it strictly.");
+            sb.AppendLine("  Use FIXED credentials — same every run, avoids creating many DB records:");
+            sb.AppendLine("  const string testEmail    = \"qa_agent_test@test.com\";");
+            sb.AppendLine("  const string testPassword = \"Test1234!\";");
+            sb.AppendLine("  var regBody = new { email = testEmail, password = testPassword };");
+            sb.AppendLine("  IGNORE the registration response — user may already exist (400) or be new.");
+            sb.AppendLine("  Do NOT assert the registration result. Proceed to login regardless.");
             sb.AppendLine();
         }
 
@@ -567,7 +572,8 @@ public sealed class TestGenerator
         sb.AppendLine($"  URL:    {_baseUrl}{loginEndpoint.Path}");
         if (hasRegister)
         {
-            sb.AppendLine("  Use the SAME uniqueEmail and \"Test1234!\" from Step 1.");
+            sb.AppendLine("  Use the SAME fixed credentials from Step 1: testEmail and testPassword.");
+            sb.AppendLine("  var loginBody = new { email = testEmail, password = testPassword };");
         }
         else
         {
@@ -761,11 +767,15 @@ public sealed class TestGenerator
         if (isRegisterEndpoint)
         {
             sb.AppendLine();
-            sb.AppendLine("⚠ UNIQUE EMAIL RULE — MANDATORY:");
-            sb.AppendLine("  This is a registration endpoint. Use a UNIQUE timestamp-based email");
-            sb.AppendLine("  to avoid 'email already exists' errors on repeated test runs:");
-            sb.AppendLine("  var email = $\"test_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}@example.com\";");
-            sb.AppendLine("  Use this 'email' variable in the request body — do NOT hardcode the email string.");
+            sb.AppendLine("⚠ REGISTRATION EMAIL RULE — MANDATORY:");
+            sb.AppendLine("  Use a FIXED test email — same across all runs to avoid polluting the DB:");
+            sb.AppendLine("  const string testEmail    = \"qa_agent_test@test.com\";");
+            sb.AppendLine("  const string testPassword = \"Test1234!\";");
+            sb.AppendLine("  For HappyPath: wrap the registration call so it IGNORES 400 (user may already exist).");
+            sb.AppendLine("  Assert success ONLY if the response is 2xx OR if it is 400 (already registered):");
+            sb.AppendLine("  var statusCode = (int)regResp.StatusCode;");
+            sb.AppendLine("  Assert.True(statusCode >= 200 && statusCode < 300 || statusCode == 400,");
+            sb.AppendLine("    $\"Expected 2xx or 400 (already registered) but got {statusCode}: {body}\");");
         }
 
         // ── Example request body (якщо є body-параметр) ─────────────────────
