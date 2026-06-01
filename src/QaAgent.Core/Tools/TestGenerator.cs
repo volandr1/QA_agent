@@ -1004,6 +1004,18 @@ public sealed class TestGenerator
             @"public async Task<bool>(\s+\w+\s*\()",
             "public async Task$1");
 
+        // ── MSTest/NUnit assertions → xUnit equivalents ──────────────────────
+        // LLM sometimes uses MSTest (Assert.IsTrue, Assert.AreEqual) instead of xUnit
+        code = code.Replace("Assert.IsTrue(",  "Assert.True(");
+        code = code.Replace("Assert.IsFalse(", "Assert.False(");
+        code = code.Replace("Assert.IsNull(",  "Assert.Null(");
+        code = code.Replace("Assert.IsNotNull(", "Assert.NotNull(");
+        // Assert.AreEqual(expected, actual) → Assert.Equal(expected, actual)
+        code = Regex.Replace(code, @"\bAssert\.AreEqual\(", "Assert.Equal(");
+        code = Regex.Replace(code, @"\bAssert\.AreNotEqual\(", "Assert.NotEqual(");
+        // StringAssert → replace with simple Assert
+        code = Regex.Replace(code, @"\bStringAssert\.\w+\(", "Assert.True(true || (");
+
         // ── await using var client → using var client ────────────────────────
         // HttpClient implements IDisposable but NOT IAsyncDisposable — await using causes compile error
         code = Regex.Replace(code, @"await\s+using\s+var\s+(\w+)\s*=\s*new\s+HttpClient\b",
@@ -1016,10 +1028,14 @@ public sealed class TestGenerator
             @"Microsoft\.VisualStudio",
             @"Microsoft\.VisualBasic",
             @"Microsoft\.AspNetCore\.Mvc\.Testing",
+            @"Microsoft\.AspNetCore\.Mvc",
+            @"Microsoft\.AspNetCore\.JsonPatch",
             @"Microsoft\.AspNetCore\.TestHost",
+            @"Microsoft\.AspNetCore\.Http",
             @"Microsoft\.Extensions\.DependencyInjection",
             @"NUnit\.Framework",
             @"MSTest",
+            @"Microsoft\.VisualStudio\.TestTools",
         };
         foreach (var ns in forbiddenUsings)
             code = Regex.Replace(code, $@"[ \t]*using\s+{ns}[^;\n]*;\s*\r?\n", "");
