@@ -169,6 +169,12 @@ public sealed class TestGenerator
                   $"Expected 2xx but got {statusCode}: {body}");
         7. Output ONLY raw C# code. No markdown. No explanation.
         8. Class name must end with "ChainTests". Namespace: QA_agent.GeneratedTests
+        9. FORBIDDEN patterns — these cause compile errors:
+           ❌ await using var client = new HttpClient() — use: using var client = new HttpClient()
+           ❌ using Microsoft.VisualStudio.* — forbidden, not available
+           ❌ Constructor with parameters in test class — class must have NO constructor
+           ❌ client.DisposeAsync() — HttpClient has no DisposeAsync
+           ❌ IClassFixture<T> — not supported, do not use
         """;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -997,6 +1003,34 @@ public sealed class TestGenerator
             code,
             @"public async Task<bool>(\s+\w+\s*\()",
             "public async Task$1");
+
+        // ── await using var client → using var client ────────────────────────
+        // HttpClient implements IDisposable but NOT IAsyncDisposable — await using causes compile error
+        code = Regex.Replace(code, @"await\s+using\s+var\s+(\w+)\s*=\s*new\s+HttpClient\b",
+            "using var $1 = new HttpClient");
+
+        // ── using Microsoft.VisualStudio.* → remove ──────────────────────────
+        // LLM sometimes adds MSTest/VisualStudio namespaces — not available in Roslyn context
+        code = Regex.Replace(code,
+            @"[ \t]*using\s+Microsoft\.VisualStudio[^;\n]*;\s*\r?\n", "");
+        code = Regex.Replace(code,
+            @"[ \t]*using\s+Microsoft\.VisualBasic[^;\n]*;\s*\r?\n", "");
+
+        // ── Remove parameterized constructors from test classes ───────────────
+        // Activator.CreateInstance() requires parameterless constructor.
+        // LLM sometimes generates IClassFixture pattern which we don't support.
+        code = Regex.Replace(code,
+            @"[ \t]*public\s+\w+Tests\s*\([^)]+\)\s*\{[^}]*\}\s*\r?\n",
+            "", RegexOptions.Singleline);
+
+        // ── HttpClient.DisposeAsync → fix await using to using ───────────────
+        // Extra safety: remove any remaining DisposeAsync calls
+        code = Regex.Replace(code,
+            @"[ \t]*await\s+\w+\.DisposeAsync\(\)\s*;\s*\r?\n", "");
+
+        // ── Remove IClassFixture<T> from class declaration ───────────────────
+        code = Regex.Replace(code,
+            @"\s*:\s*IClassFixture<[^>]+>", "");
 
         // ── Path params used as undefined variables in interpolated strings ───
         // Pattern: $".../{someVar}" where someVar looks like an ID but is not declared
